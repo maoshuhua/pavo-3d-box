@@ -1,0 +1,42 @@
+.motion-annotate-overlay{z-index:2;position:absolute;inset:0}
+.motion-annotate-overlay.motion-annotate-captureOutline:after{z-index:2;inset:0 var(--preview-right-width,0px) var(--preview-dock-height,0px) var(--preview-left-width,0px);box-sizing:border-box;content:"";pointer-events:none;border:4px solid #3fdafd;position:absolute}
+.motion-annotate-overlay[data-tool=select]{pointer-events:none}
+.motion-annotate-canvas{touch-action:none;cursor:crosshair;display:block}
+.motion-annotate-overlay[data-tool=eraser] .motion-annotate-canvas{cursor:cell}
+.motion-annotate-overlay[data-tool=text] .motion-annotate-canvas{cursor:text}
+.motion-annotate-textInput{z-index:1;box-sizing:border-box;overflow-wrap:anywhere;resize:none;white-space:pre-wrap;background:0 0;border:0;border-bottom:1px solid;outline:none;min-width:120px;padding:0;font-family:inherit;line-height:1.4;position:absolute;overflow:hidden}
+.motion-annotate-annotate{transform:translateX(calc(-50% + (var(--preview-left-width,0px) - var(--preview-right-width,0px)) / 2));z-index:3;flex-direction:column;align-items:center;gap:4px;display:flex;position:absolute;bottom:16px;left:50%}
+.motion-annotate-row{align-items:center;gap:8px;display:flex}
+.motion-annotate-bar{-webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px);background:#1f1f1fe6;border:1px solid #ffffff14;border-radius:9999px;align-items:center;padding:8px;display:flex;box-shadow:0 16px 24px #0000001f,0 4px 8px #00000014,0 1px 1px #0000000a}
+.motion-annotate-options,.motion-annotate-toolbar{gap:8px}
+.motion-annotate-exit{padding:8px}
+.motion-annotate-tools{align-items:center;gap:8px;display:flex}
+.motion-annotate-tool{color:#ffffffb8;cursor:pointer;background:0 0;border:0;border-radius:9999px;justify-content:center;align-items:center;width:32px;height:32px;padding:0;transition:background-color .15s,color .15s;display:inline-flex}
+.motion-annotate-tool:hover{color:#fff;background:#ffffff14}
+.motion-annotate-tool[data-active=true],.motion-annotate-tool[data-active=true]:hover{color:#1a1a1a;background:#fff}
+.motion-annotate-confirm{color:#fff;cursor:pointer;background:linear-gradient(#53dfff 0%,#00bee9 100%);border:0;border-radius:9999px;justify-content:center;align-items:center;width:32px;height:32px;padding:0;display:inline-flex;box-shadow:inset 0 1px 2px #ffffff80,0 4px 6px #3fdafd14}
+.motion-annotate-confirm:hover{filter:brightness(1.06)}
+.motion-annotate-size{color:#fff;cursor:pointer;background:0 0;border:0;border-radius:9999px;justify-content:space-between;align-items:center;width:72px;height:32px;padding:0 4px 0 8px;font-size:13px;line-height:20px;display:inline-flex}
+.motion-annotate-size:hover{background:#ffffff14}
+.motion-annotate-size[data-expanded=true]{background:#ffffff1a}
+.motion-annotate-fontSizeMenu{background:#242424;border:1px solid #ffffff14;border-radius:16px;padding:6px;overflow:hidden;box-shadow:0 16px 24px -8px #0000000f,0 4px 8px -4px #0000000a,0 1px 1px #00000005}
+.motion-annotate-fontSizeOption{color:#ffffffe6;border-radius:10px;height:36px;min-height:36px;padding:7px 8px;font-size:13px;line-height:20px}
+.motion-annotate-fontSizeOption:hover{background:#ffffff1a}
+.motion-annotate-strokes{align-items:center;gap:8px;padding:0 8px;display:flex}
+.motion-annotate-stroke{cursor:pointer;background:0 0;border:0;justify-content:center;align-items:center;width:18px;height:18px;padding:0;display:inline-flex}
+.motion-annotate-dot{background:#ffffff59;border-radius:50%;display:block}
+.motion-annotate-stroke[data-active=true] .motion-annotate-dot{background:#fff}
+.motion-annotate-divider{background:#ffffff1f;width:1px;height:26px}
+.motion-annotate-colors{align-items:center;gap:9px;padding:0 9px;display:flex}
+.motion-annotate-color{cursor:pointer;background:0 0;border:0;border-radius:50%;justify-content:center;align-items:center;width:18px;height:18px;padding:0;display:inline-flex}
+.motion-annotate-swatch{background:var(--preview-annotate-color);border-radius:50%;width:14px;height:14px;display:block;box-shadow:inset 0 0 0 1px #0000001f}
+.motion-annotate-color[data-active=true] .motion-annotate-swatch{width:18px;height:18px;box-shadow:inset 0 0 0 1px #0000001f,0 0 0 2px #1f1f1f,0 0 0 3.5px #ffffffd9}/* The local editor has a stage inset by the two sidebars. */
+.motion-annotation-surface{position:absolute;top:0;z-index:2;overflow:hidden;pointer-events:none}
+.motion-annotation-surface .motion-annotate-overlay{pointer-events:auto}
+.motion-annotation-surface .motion-annotate-overlay[data-tool=select]{pointer-events:none}
+.motion-annotation-surface .motion-annotate-captureOutline:after{inset:0}
+.motion-annotate-annotate{z-index:50}
+.motion-annotate-size option{background:#242424;color:#fff}
+.motion-annotate-confirm:disabled{opacity:.5;cursor:default}
+.motion-annotate-tool svg,.motion-annotate-confirm svg{display:block;flex-shrink:0}
+.motion-annotate-tool:focus-visible,.motion-annotate-color:focus-visible,.motion-annotate-stroke:focus-visible,.motion-annotate-confirm:focus-visible{outline:2px solid #3fdafd;outline-offset:3px}

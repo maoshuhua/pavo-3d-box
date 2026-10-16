@@ -1,0 +1,105 @@
+Scene program contract (local implementation, not libtv's private server API)
+
+Write /scene.js defining function build(ctx) { return SPEC; }. No import/export or async.
+This runs in QuickJS with Math/JSON only. Loops and helper functions work.
+ctx.scene = current collaboration JSON (entities with stable id/kind/state).
+ctx.reference = selected entity or timeline clip, including stable id and times.
+ctx.assets = uploaded file descriptors {id,name,kind}; GLB assets can be inserted.
+The only model tools are x_list, x_read, x_write, x_edit, x_grep, preview_3D_scene, build_3D_scene.
+Read /context.json and /scene-api.txt with x_read. Existing source can be read at /scene.js.
+Use x_list to locate source files; use x_grep to find exact text or stable entity IDs before editing.
+File tools access only this project's workspace .js/.json/.txt/.md files. A leading / is a virtual project path.
+Disk absolute paths, parent traversal (..), and symlinks are rejected. /context.json and /scene-api.txt are read-only.
+Single text file reads are limited to 32 MiB. x_read/x_grep text output is limited to 64000 characters.
+Directory scans inspect at most 10000 entries and descend at most 64 levels; output/scan limits set truncated.
+When truncated, narrow the directory/search or read smaller line ranges; do not treat partial results as complete.
+
+FILE TOOLS:
+x_list({path:"/",recursive:false,max_entries:200}) -- all fields optional; max_entries 1..1000.
+ Returns {status:"completed",path,entries:[{path,type:"file"|"directory",bytes?}],truncated}.
+x_read({path,offset:0,column:0,limit:300}) -- offset is a zero-based line offset; column is a zero-based character offset in the first returned line; limit 1..1000.
+ Returns {status:"completed",path,totalLines,offset,content,truncated,next?}; content includes original 1-based line numbers.
+ Only when truncated is true, next:{offset,column} is returned; pass it directly into the next x_read call.
+ This cursor also resumes a single line longer than 64000 characters. Complete results omit next.
+x_write({path,content,overwrite:false}) -- create a text file; explicit overwrite required for an existing file; max 1 MiB, including UTF-8 byte validation.
+ Returns {status:"completed",path,bytes,sha256}.
+x_edit({path,old_string,new_string,replace_all:false}) -- exact text replacement; default requires one unique match.
+ Returns {status:"completed",path,replacements,sha256}.
+x_grep({pattern,path:"/",case_sensitive:true,max_results:100}) -- pattern is nonempty literal text, not regex.
+ path may name a file or directory; directory search is recursive; max_results 1..1000.
+ Returns {status:"completed",pattern,path,matches:[{path,line,text,textOffset?,textTruncated?}],truncated}; line is 1-based.
+ For a long line, text is a nearby excerpt containing the match; textOffset is its zero-based character position in the original line and textTruncated is true.
+ Ordinary short-line matches omit textOffset and textTruncated.
+Optional fields above show defaults. Tool errors return {status:"error",error}; inspect and fix before retrying.
+
+SPEC:
+{
+ version:1,
+ mode:"patch", // default; retain all existing objects/animations. "replace" only when explicitly creating a new scene.
+ objects:[
+  {id:"stable-id", type:"mesh", name:"Unique readable name", parentId:null,
+   transform:{position:[0,0,0],rotation:[0,0,0,1],scale:[1,1,1]}, visible:true,
+   geometry:{type:"box",args:[width,height,depth]},
+   material:{color:"#ffaa00",metallic:0,roughness:0.7}}
+ ],
+ remove:[],
+ animations:[],
+ operations:[]
+}
+
+All optional node fields omitted during a patch retain existing values.
+An existing id identifies an update. A new id requires type. Do not invent ids of existing nodes; read ctx.scene.
+parentId references another id; null means root. No cyclic parenting.
+rotation is XYZW quaternion, not Euler angles. Use [0,Math.sin(yaw/2),0,Math.cos(yaw/2)] for yaw.
+geometry types and args:
+ box [width,height,depth]; plane [width,height]; sphere [radius,widthSegments,heightSegments];
+ cylinder [radiusTop,radiusBottom,height,radialSegments]; cone [radius,height,radialSegments];
+ torus [radius,tube,radialSegments,tubularSegments]; capsule [radius,length,capSegments,radialSegments];
+ buffer {type:"buffer",positions:[x,y,z,...],indices:[0,1,2,...]} for arbitrary procedural meshes.
+Create detailed models by grouping many named parts. Use loops for repeated sleepers, coins, windows, pillars.
+Node types:
+ group: parent for movable assemblies; animate this group to move all its parts.
+ mesh: requires geometry on creation. material may also have baseColor:[r,g,b,a], emissive:"#rrggbb".
+ camera: camera:{fov:50,near:0.05,far:1000,aspect:1.77777778}; lookAt:[x,y,z] sets static orientation.
+ light: light:{type:"directional"|"point"|"spot",color:[1,1,1],intensity:3,castShadow:true,range:0,outerConeAngle:1,innerConeAngle:0}.
+ asset: assetId from ctx.assets of kind glb, imports that GLB as a group, preserving its geometry/materials.
+
+Animations are baked samples, editable and included in GLB:
+{id:"run-motion",name:"Runner movement",duration:15,tracks:[
+ {entityId:"runner",property:"position",times:[0,1,2],values:[0,0,0, 0,0,-5, 2,0,-10]},
+ {entityId:"runner",property:"quaternion",times:[0,1],values:[0,0,0,1, 0,0,0,1]}
+]}
+property is position/quaternion/scale. times increase strictly and fit duration.
+Values are flat arrays (3 or 4 numbers per time). Reuse animation name to replace an existing animation.
+Bake smooth runner limb animation, jump/slide and camera tracking at 24fps with loops, not just endpoints.
+Camera quaternion can be derived with your own look-at quaternion helper using vector math.
+Camera looks along local -Z, Y is up, right-handed world.
+
+world:{type:"solid",color:[0.22,0.24,0.27],strength:2}
+timeline:{version:1,duration:15,shots:[{cameraId:"camera-id",start:0,end:15}]}
+Set camera aspect and timeline for all new scenes. At least one named camera and sufficient lighting.
+For patching a selected clip, use reference.entityId/cameraId and start/end, preserve unrelated nodes and shots.
+
+operations accepts validated libtv collaboration operations (entityId,kind,payload):
+entity.transform.set/object.transform.set/camera.transform.set:{transform:{position:[x,y,z],rotation:[x,y,z,w],scale:[x,y,z]}}
+entity.rename/object.rename:{name}; entity.delete/object.delete:{}
+camera.projection.set:{projection:{type:"perspective",verticalFov:radians,near,far}}
+camera.active.set:{}; world.settings.set:{settings:{type:"solid",color:[r,g,b],strength}}
+timeline.shots.set:{timeline:{version:1,duration,shots:[{cameraId,start,end}]}}
+object.material.set:{material:{baseColor:[r,g,b,a],metallic,roughness}}
+light.properties.set:{properties:{type:"directional"|"point"|"spot",color:[r,g,b],intensity,castShadow}}
+camera.rig.set:{rig:{aspect:number|null,dofFocusName:string|null,path:null,animation:{name,duration,times,positions,quaternions}}}
+For editable camera paths, path may instead be {id,name,transform,settings,waypoints:[{id,name,transform}],anchor:null,aim:null,focus:null,focusParent:"path"}; animation may be null.
+
+BUILD AND PREVIEW:
+build_3D_scene({source:"/scene.js"}) -- source is optional. Executes build(ctx), validates the spec,
+ applies it to the current GLB/JSON baseline, and exports immutable local GLB/JSON artifacts.
+ Returns {status:"completed",task_id,source,source_hash,source_sha256,glb_url,collaboration_url,glb_size,glb_sha256,triangles}.
+preview_3D_scene({camera_id,time:0}) -- camera_id is an optional stable camera id (defaults to first camera).
+ time is in seconds and must fit the timeline. Restores the latest successful build and renders its actual animation.
+ Returns {status:"completed",task_id,camera_id,time,width,height,image_url} plus image pixels for the next model call.
+
+Workflow: x_list/x_read/x_grep context/source → x_write/x_edit → build_3D_scene → preview_3D_scene at start/key actions/end → fix/rebuild/preview if needed → concise Chinese delivery.
+The frontend keeps its existing tool status display, staging validation, scene/timeline update, and local GLB/JSON autosave/recovery; no new UI entry is needed.
+Build failures return status:error with an actionable message. Never claim completion after a failed build.
+preview returns actual PNG pixels to the model; inspect them before saying the scene is checked.

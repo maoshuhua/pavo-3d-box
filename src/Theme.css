@@ -1,0 +1,34 @@
+/* Dark theme values from libtv 39_7nxju5g1_1.css and 129_y89ca9lu0.css. */
+.workspace,.studio-scroll{
+  --nt-border-neutral-l2:#ffffff1f;
+  --nt-border-contrast:#ffffffe5;
+  --nt-icon-default:#fff;
+  --nt-bg-float:#242424;
+  --nt-bg-overlay:#ffffff0f;
+  --nt-bg-overlay-hover:#ffffff14;
+  --nt-text-default:#fff;
+  --nt-border-neutral-l1:#ffffff14;
+  --nt-text-secondary:#fff9;
+  --nt-bg-invert:#fff;
+  --nt-text-onbrand:#000;
+  --fg-default:#f7f7f7;
+  --fg-muted:#919191;
+  --nt-text-tertiary:#ffffff4d;
+  --nt-bg-brand:#13d5ff;
+  --nt-black:#000;
+  --nt-bg-float-glass-l1:#1f1f1ff2;
+  --nt-bg-overlay-active:#ffffff1a;
+  --nt-text-brand:#5ddcff;
+  --nt-danger-default:#e74c3c;
+  --canvas-controls-hover:#ffffff1a;
+  --canvas-controls-border:#363636;
+  --canvas-controls-bg:#262626;
+  --canvas-controls-text:#fff;
+  --canvas-controls-active:#ffffff26;
+  --canvas-shadow-menu:0 8px 32px #00000026,0 2px 8px #0000001a;
+  --border-brand:#09caf5;
+  --border-neutral-l1:#ffffff14;
+  --bg-float:#242424;
+  --bg-overlay:#000000b2;
+  --text-secondary:#fff9;
+}

@@ -1,0 +1,5 @@
+{
+  "name": "【官方示例】古代街景一镜到底",
+  "coverUrl": "/assets/studio/example-cover.jpg",
+  "config": "{\"animationPreview\":{\"version\":1,\"generationSettings\":{\"aspectRatio\":\"16:9\",\"durationSeconds\":\"auto\",\"agentMode\":\"G6\",\"reasoningModel\":\"g6\"},\"generation\":{\"status\":\"completed\",\"task_id\":\"20260918222903804843336\",\"glb_url\":\"/assets/studio/example-original.glb\",\"collaboration_url\":\"/assets/studio/example.json\",\"glb_size\":3822928,\"glb_sha256\":\"711dfba58e13364e4683095a74147a73b96f316a90b6c957b4c7360ad9ad4cbb\",\"triangles\":28342},\"glbUrl\":\"/assets/studio/example.glb\",\"worldSettings\":{\"type\":\"solid\",\"color\":[0.22,0.24,0.27],\"strength\":2}}}"
+}
