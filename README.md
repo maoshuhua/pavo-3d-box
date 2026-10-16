@@ -2,6 +2,28 @@
 
 本地运行的 3D 动画预演编辑器：React、Three.js、SQLite 与 LangChain Deep Agents。
 
+## 系统截图
+
+以下为本地运行的真实界面截图，使用仓库自带示例，不包含私人项目、对话或模型服务配置。
+
+### 首页
+
+场景描述、生成设置、预演示例与项目列表。
+
+![Pavo 3D BOX 首页](docs/screenshots/home.jpg)
+
+### 场景编辑
+
+3D 视窗、监视器、机位预览、项目资产、属性编辑和时间轴。
+
+![Pavo 3D BOX 场景编辑器](docs/screenshots/editor.jpg)
+
+### 成片预演
+
+从场景调度切换到机位画面，收起编辑侧栏和时间轴查看预演。
+
+![Pavo 3D BOX 成片预演](docs/screenshots/film-preview.jpg)
+
 ## 功能
 
 - 项目首页与编辑器、GLB 导入、场景资产和属性编辑。
