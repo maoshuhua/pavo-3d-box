@@ -2,6 +2,7 @@ import React,{useEffect,useLayoutEffect,useRef,useState} from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import './AgentPanel.css';
+import DirectorProgress from './DirectorProgress.jsx';
 import {SketchIcon} from './MotionAnnotation.jsx';
 import {useComposerInteraction,useComposerMorph} from './useComposerCollapse.js';
 import {useComposerPosition} from './agentFloatingLayout.js';
@@ -56,6 +57,7 @@ export default function AgentPanel({client,reference,disabled,running,onGenerate
    </header>
    <div className="agent-messages" ref={messages} role="log" aria-live="polite" onScroll={e=>{nearBottom.current=e.currentTarget.scrollHeight-e.currentTarget.scrollTop-e.currentTarget.clientHeight<48}}>
     {client.state.messages.map(m=><div key={m.id} className="agent-message" data-role={m.role} data-tool-status={m.toolStatus} role={m.role==='tool'?'status':undefined}>
+     {m.director&&<DirectorProgress state={m.director}/>}
      {m.reference&&<span className="agent-selectionTag agent-messageReference">{m.reference.label}</span>}
      {m.role==='assistant'?<Markdown remarkPlugins={[remarkGfm]} components={{a:({node,...props})=><a {...props} target="_blank" rel="noopener noreferrer"/>}}>{m.text}</Markdown>:<div>{m.role==='tool'&&<svg className="agent-toolIcon" width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m7 10 5 5a3 3 0 0 0 4-4L9 4a4 4 0 0 0-6 6l8 8M7 6l7 7"/></svg>}{m.text}</div>}
      {m.attachments?.map((f,i)=><MessageAttachment key={i} file={f}/>)}

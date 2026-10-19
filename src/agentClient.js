@@ -57,6 +57,11 @@ export class AgentClient {
       if(event.seq){if(event.seq<=(this.state.eventSeq||0))return;this.state.eventSeq=event.seq;}
       if (event.type === 'SESSION') {this.state.sessionId = event.sessionId; this.save();}
       if(event.type==='RUN_STARTED'){this.state.runStatus='running';if(this.state.activeRun)this.state.activeRun.status='running';}
+      if(event.type==='DIRECTOR_STATE'){
+        const id=`${runId}:director`;let item=this.state.messages.find(m=>m.id===id);
+        if(!item){item={id,role:'assistant',text:''};this.state.messages.push(item);}
+        item.director=event.state;this.save();onEvent();
+      }
       if (event.type === 'RUN_ERROR') {failure = Error(event.message || 'Agent 生成失败。');this.state.runStatus='failed';if(this.state.activeRun)this.state.activeRun.status='failed';}
       if (event.type === 'RUN_FINISHED') {finished = true;this.state.runStatus='completed';if(this.state.activeRun)this.state.activeRun.status='completed';}
       if(event.type==='TOOL_CALL_START'){

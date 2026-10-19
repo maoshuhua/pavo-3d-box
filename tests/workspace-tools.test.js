@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {createSceneTools} from '../server/tools.js';
 
-const toolNames=['x_list','x_read','x_write','x_edit','x_grep','preview_3D_scene','build_3D_scene'];
+const toolNames=['x_list','x_read','x_write','x_edit','x_grep','coding_todo_write','preview_3D_scene','build_3D_scene'];
 const result=value=>typeof value==='string'?JSON.parse(value):value;
 
 async function fixture(t){
@@ -13,6 +13,9 @@ async function fixture(t){
  t.after(()=>fs.rm(root,{recursive:true,force:true}));
  const dir=path.join(root,'project'),workspace=path.join(dir,'workspace'),controller=new AbortController(),events=[];
  await fs.mkdir(workspace,{recursive:true});
+ await fs.mkdir(path.join(workspace,'skills','studio-director'),{recursive:true});
+ await fs.writeFile(path.join(workspace,'agent-state.json'),'{}');
+ await fs.writeFile(path.join(workspace,'skills','studio-director','SKILL.md'),'Director method');
  await fs.writeFile(path.join(workspace,'context.json'),'\u007b"scene":"reference"\u007d\n');
  await fs.writeFile(path.join(workspace,'scene-api.txt'),'Scene program API\n');
  const tools=createSceneTools({dir,projectId:'workspace-test',signal:controller.signal,emit:e=>events.push(e),assets:[],sceneJson:{version:1,entities:[],operations:[]}});
@@ -21,7 +24,7 @@ async function fixture(t){
  return {root,dir,workspace,controller,events,tools,invoke};
 }
 
-test('workspace exposes exactly the seven scene tools and lists only the workspace',async t=>{
+test('workspace exposes exactly the eight scene tools and lists only the workspace',async t=>{
  const {dir,workspace,tools,invoke}=await fixture(t);
  assert.deepEqual(tools.map(tool=>tool.name).sort(),toolNames.toSorted());
  await fs.mkdir(path.join(workspace,'nested'));
@@ -29,7 +32,7 @@ test('workspace exposes exactly the seven scene tools and lists only the workspa
  await fs.writeFile(path.join(dir,'private.txt'),'must not be listed');
  const listed=await invoke('x_list',{});
  assert.equal(listed.status,'completed');assert.equal(listed.path,'/');assert.equal(listed.truncated,false);
- assert.deepEqual(new Map(listed.entries.map(entry=>[entry.path,entry.type])),new Map([['/context.json','file'],['/scene-api.txt','file'],['/nested','directory']]));
+ assert.deepEqual(new Map(listed.entries.map(entry=>[entry.path,entry.type])),new Map([['/context.json','file'],['/scene-api.txt','file'],['/agent-state.json','file'],['/skills','directory'],['/nested','directory']]));
  assert.equal(listed.entries.find(entry=>entry.path==='/context.json').bytes,Buffer.byteLength('{"scene":"reference"}\n'));
  const recursive=await invoke('x_list',{recursive:true});
  assert(recursive.entries.some(entry=>entry.path==='/nested/scene.js'&&entry.type==='file'));
@@ -146,7 +149,7 @@ test('workspace paths reject traversal, disk paths and immutable context mutatio
    const rejected=await invoke(name,args);assert.equal(rejected.status,'error',`${name} must reject ${JSON.stringify(invalid)}`);
   }
  }
- for(const immutable of ['/context.json','/scene-api.txt']){
+ for(const immutable of ['/context.json','/scene-api.txt','/agent-state.json','/skills/studio-director/SKILL.md']){
   const write=await invoke('x_write',{path:immutable,content:'changed',overwrite:true});assert.equal(write.status,'error');
   const edit=await invoke('x_edit',{path:immutable,old_string:immutable.endsWith('.json')?'reference':'Scene',new_string:'changed'});assert.equal(edit.status,'error');
   const stillReadable=await invoke('x_read',{path:immutable});assert.equal(stillReadable.status,'completed');assert(!stillReadable.content.includes('changed'));

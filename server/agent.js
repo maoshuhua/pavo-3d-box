@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import {createDeepAgent,createFilesystemMiddleware} from 'deepagents';
 import {ChatOpenAI} from '@langchain/openai';
 import {createMiddleware} from 'langchain';
@@ -11,15 +12,18 @@ import {ROOT} from './config.js';
 import {reviewCompletion} from './reviewCompletion.js';
 import {agentRecursionLimit,createStepBudget,stepLimitMessage} from './agentBudget.js';
 import {resolveAgentModel} from './agentModels.js';
+import {CodingTodo} from './codingTodo.js';
+import {directorSummary} from './directorSummary.js';
+import {atomicWrite} from './storage.js';
 
 const instructions=`你是 3D-BOX 场景与运镜 Agent，用中文沟通。用户在一个已有三维编辑器中工作。
-只使用这七个工具：x_list、x_read、x_write、x_edit、x_grep、preview_3D_scene、build_3D_scene。
+只使用八个工具：x_list、x_read、x_write、x_edit、x_grep、coding_todo_write、preview_3D_scene、build_3D_scene。
 使用 x_list 查看项目工作区、x_read 分页读取、x_grep 按字面量定位代码，再用 x_write/x_edit 编写或修改场景程序；build_3D_scene 生成实际 GLB/协作 JSON，preview_3D_scene 检查真实画面。
 这些是本项目实现的工具协议，不要声称拿到了 libtv 私有服务端源码。
 开始用 x_list 查看 /，再用 x_read 读取 /context.json 和 /scene-api.txt。编辑既有场景时读取 /scene.js（不存在时创建），可用 x_grep 定位引用的稳定 id/片段时间，避免无意义地反复读取整文件。
 所有文件路径均为当前项目工作区虚拟路径。/context.json 和 /scene-api.txt 只读，不要覆盖。x_read 输出 truncated=true 时使用 next.offset/next.column 继续读取；x_grep 的长行片段会标出 textOffset。
 默认 mode:patch，保留没有被要求修改的模型、灯光、机位、动画、材质；只有明确新建整个场景时才 mode:replace。
-场景要有合理比例、足够灯光、至少一个机位、正确画幅和时间轴。创建复杂场景时可先构建基础版本，再补细节。
+遵循已加载的导演 skill。先用 coding_todo_write 的 set_plan 提交分镜和验收标准，再用 update_tasks 提交结果型任务。每次写操作有唯一 requestId；可读取 /agent-state.json 或用 op:read 恢复进度。审查任务执行完成可以同时验收失败，先用 record_reviews 保存失败证据，再更新任务。计划中的 cameraRef 必须是场景实际机位 ID。优先源码预览修正关键问题，再导出；导出后使用当前 GLB 帧证据重新验收。
 场景程序只能定义 function build(ctx)，用数学与循环返回文档所述 JSON，不写 Three.js/import/export/文件/网络/命令行代码。
 先检查工具返回，报错时读取并修复后重试。每次成功 build 会立即替换前端场景，错误或未完成产物不会覆盖原场景。
 相机运动、角色跑动/跳跃/滑行都要烘焙动画采样，不能用文字代替。动画控制组与身体部件拆分以保留可编辑性。
@@ -32,6 +36,9 @@ export async function runDeepAgent(ctx,{model:injectedModel}={}){
  ctx.signal.throwIfAborted();
  ctx.streamedToolIds=new Set();
  ctx.completedBuilds=0;ctx.previewChecks=[];ctx.finalizing=false;
+ ctx.runId ||= crypto.randomUUID();
+ ctx.director=await CodingTodo.open(ctx);
+ const directorSkill=await fs.readFile(path.join(ROOT,'server','skills','studio-director','SKILL.md'),'utf8');
  const recursionLimit=agentRecursionLimit(),stepBudget=createStepBudget(recursionLimit);
  const streamedCalls=new Map();
  const checkpoint=await DiskSaver.open(path.join(ctx.dir,'sessions',ctx.sessionId,'checkpoint.bin'));
@@ -60,6 +67,7 @@ export async function runDeepAgent(ctx,{model:injectedModel}={}){
    }
    messages.push(new HumanMessage({content}));
   }
+  messages.push(new HumanMessage({content:'当前导演计划、任务和证据摘要：'+JSON.stringify(directorSummary(ctx.director.snapshot()))}));
   const configuredPasses=Number(process.env.AGENT_MAX_BUILD_PASSES||3);
   const completed=reviewCompletion(ctx,Number.isInteger(configuredPasses)&&configuredPasses>=1&&configuredPasses<=10?configuredPasses:3);
   const budget=stepBudget(getConfig()?.metadata?.langgraph_step);
@@ -73,11 +81,12 @@ export async function runDeepAgent(ctx,{model:injectedModel}={}){
   if(ctx.finalizing&&response.tool_calls?.length)throw Error('模型在收尾时仍请求调用工具，已停止本轮执行。最近成功产物已保留；未完成的修改和检查不能视为通过。');
   return response;
  }});
- const agent=await createDeepAgent({model,tools,checkpointer:checkpoint,systemPrompt:instructions,
+ const agent=await createDeepAgent({model,tools,checkpointer:checkpoint,systemPrompt:instructions+'\n\n已加载导演 skill：\n'+directorSkill,
   middleware:[createFilesystemMiddleware({tools:['read_file','ls']}),sceneToolsOnly]});
  const api=await fs.readFile(path.join(ROOT,'server','scene-api.txt'),'utf8');
  const context={scene:ctx.sceneJson,reference:ctx.reference,generationSettings:ctx.generationSettings,attachments:ctx.assets.map(({id,name,kind,text})=>({id,name,kind,...text?{text}:{}}))};
  await ctx.writeContext(context,api);
+ await atomicWrite(path.join(ctx.dir,'workspace','skills','studio-director','SKILL.md'),directorSkill);
  ctx.signal.throwIfAborted();
  const content=[{type:'text',text:`${ctx.prompt||'请根据所附参考调整场景。'}\n\n当前上下文保存在 /context.json，场景程序 API 在 /scene-api.txt。${ctx.generationSettings?'项目生成设置（必须遵守画幅和指定时长）：'+JSON.stringify(ctx.generationSettings):''}${ctx.reference?'本轮引用：'+JSON.stringify(ctx.reference):''}`}];
  for(const asset of ctx.assets){
