@@ -69,6 +69,14 @@ for their shots; motion requirements need different times for each relevant
 shot. Do not invent evidence IDs or treat missing images as evidence. New source,
 plan or delivery versions can invalidate old acceptance. Historical evidence
 remains useful for diagnosis but cannot certify a different version.
+After any source edit, use fresh frames for every criterion you pass, including
+unchanged cameras. A motion review needs at least two distinct current times
+inside each relevant shot, using that shot's camera. If a review batch is
+rejected, none of that batch was saved. Read the error's missing camera/time
+coverage, render the missing samples, and retry with their returned IDs; do not
+retry the same insufficient evidence. Keep numeric implementation details in a
+plan consistent with the corrected source, or phrase criteria as intended
+behavior rather than baking a particular angle or direction into them.
 
 ## Inspect and deliver the exported result
 

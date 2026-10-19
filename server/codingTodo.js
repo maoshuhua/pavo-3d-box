@@ -160,7 +160,16 @@ export class CodingTodo {
   // even when it has no usable frame; it cannot make delivery ready.
   if(review.verdict!=='pass')return;
   const evidence=this._reviewEvidence(state,review);
-  if(!this._coverage(state,criterion,evidence))throw Error(`Insufficient current evidence for ${criterion.id}`);
+  if(!this._coverage(state,criterion,evidence)){
+   const stale=review.evidenceIds.length-evidence.length;
+   const missing=criterion.kind==='structural'?['a current source preview or build record']:
+    this._criterionShots(state,criterion).flatMap(shot=>{
+     const times=[...new Set(evidence.filter(e=>e.kind==='frame'&&e.cameraId===shot.cameraRef&&e.time>=shot.start-.001&&e.time<=shot.end+.001).map(e=>Math.round(e.time*1000)/1000))];
+     const required=criterion.kind==='motion'?2:1;
+     return times.length<required?[`${shot.id}: camera ${shot.cameraRef}, time range [${shot.start}, ${shot.end}], needs ${required} distinct current frame times; linked ${times.length} (${times.join(', ')||'none'})`]:[];
+    });
+   throw Error(`Insufficient current evidence for ${criterion.id}. Missing: ${missing.join('; ')}. ${stale} linked evidence record(s) are stale or incompatible with the current source/plan/build. Render these camera/time samples with preview_3D_scene, then retry record_reviews using the returned current evidence IDs. Source edits invalidate earlier frames even for unchanged cameras. If the observation cannot be established, record fail or unverified instead of pass. No reviews from this request were saved.`);
+  }
   if(criterion.kind==='structural'){
    const source=evidence.find(e=>e.kind==='build'||e.kind==='draft');
    if(!source?.checks?.length||source.checks.some(c=>!c.pass))throw Error('Structural checks have unresolved issues');

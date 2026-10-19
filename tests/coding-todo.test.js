@@ -217,3 +217,19 @@ test('historical completed work needs current source proof before a new delivery
  await todo.apply({op:'update_tasks',requestId:'current-proof',tasks:[{id:'implement-result',title:'Implement the requested source',kind:'implement',status:'completed',evidenceIds:[second.frames[1].id]}]});
  assert.equal(todo.ready().ready,true);
 });
+
+test('rejected motion review identifies missing current camera times and can recover without weakening coverage',async t=>{
+ const {todo}=await setup(t),old=await evidence(todo,{target:'draft'});
+ const current=await evidence(todo,{target:'draft',sourceHash:'source-b',times:[1]});
+ const reviews=[{criterionId:'visible',verdict:'pass',evidenceIds:[current.frames[0].id],observation:'The current image shows the subject.'},{criterionId:'motion',verdict:'pass',evidenceIds:[old.frames[0].id,current.frames[0].id],observation:'Check the movement.'}];
+ await assert.rejects(todo.apply({op:'record_reviews',requestId:'insufficient-motion',reviews}),error=>{
+  assert.match(error.message,/motion/);assert.match(error.message,/shot: camera camera, time range \[0, 2\], needs 2 distinct current frame times; linked 1 \(1\)/);
+  assert.match(error.message,/1 linked evidence record\(s\) are stale/);assert.match(error.message,/preview_3D_scene/);assert.match(error.message,/No reviews from this request were saved/);return true;
+ });
+ assert.equal(todo.snapshot().reviews.length,0,'a rejected batch must not silently partially save');
+ const [second]=await todo.registerFrames({...current.key,target:'draft',frames:[{camera_id:'camera',time:2}]});
+ reviews[1].evidenceIds=[current.frames[0].id,second.id];
+ await todo.apply({op:'record_reviews',requestId:'recovered-motion',reviews});
+ assert.equal(todo.snapshot().reviews.find(review=>review.criterionId==='motion').verdict,'pass');
+ assert.equal(todo.ready().ready,false,'recovering a draft review cannot certify delivery');
+});
