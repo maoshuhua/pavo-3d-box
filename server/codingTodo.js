@@ -21,6 +21,9 @@ export const codingTodoSchema=z.discriminatedUnion('op',[
  z.object({op:z.literal('update_tasks'),...mutation,tasks:z.array(taskSchema).min(1).max(200)}).strict(),
  z.object({op:z.literal('record_reviews'),...mutation,reviews:z.array(reviewSchema).min(1).max(200)}).strict(),
 ]);
+// Compatible chat gateways require an object at the function schema root.
+// Keep operation-specific validation above in apply(), after tool invocation.
+export const codingTodoToolSchema=z.object({op:z.enum(['read','set_plan','update_tasks','record_reviews']),requestId:id.optional(),expectedRevision:z.number().int().nonnegative().optional(),plan:directorPlanSchema.optional(),tasks:z.array(taskSchema).min(1).max(200).optional(),reviews:z.array(reviewSchema).min(1).max(200).optional()}).strict();
 const clone=value=>structuredClone(value);
 const unique=(values,label)=>{if(new Set(values).size!==values.length)throw Error(`Duplicate ${label}`);};
 const binding=(a,b)=>!!a&&!!b&&a.sourceHash===b.sourceHash&&a.baselineRevision===b.baselineRevision;

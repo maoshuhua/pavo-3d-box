@@ -57,6 +57,11 @@ export class AgentClient {
       if(event.seq){if(event.seq<=(this.state.eventSeq||0))return;this.state.eventSeq=event.seq;}
       if (event.type === 'SESSION') {this.state.sessionId = event.sessionId; this.save();}
       if(event.type==='RUN_STARTED'){this.state.runStatus='running';if(this.state.activeRun)this.state.activeRun.status='running';}
+      if(event.type==='MODEL_STATUS'){
+        const key=`${event.id}:model`;let item=this.state.messages.find(m=>m.id===key);
+        if(!item){item={id:key,role:'tool',toolName:'模型响应'};this.state.messages.push(item);}
+        Object.assign(item,{text:event.text,toolStatus:event.status,modelStatus:event});this.save();onEvent();
+      }
       if(event.type==='DIRECTOR_STATE'){
         const id=`${runId}:director`;let item=this.state.messages.find(m=>m.id===id);
         if(!item){item={id,role:'assistant',text:''};this.state.messages.push(item);}

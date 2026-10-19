@@ -9,12 +9,14 @@ import {atomicWrite,sha256} from './storage.js';
 import {workspaceTarget,listWorkspace,readWorkspace,grepWorkspace,writeWorkspace,editWorkspace} from './workspace.js';
 import {evaluateProgram} from './program.js';
 import {renderCall} from './renderService.js';
-import {CodingTodo,codingTodoSchema} from './codingTodo.js';
+import {CodingTodo,codingTodoToolSchema} from './codingTodo.js';
 import {directorSummary} from './directorSummary.js';
 
 export function createSceneTools(ctx){
  const {dir,emit,signal,projectId}=ctx;
  let current=ctx.current,toolQueue=Promise.resolve();
+ // Source describes changes against this run's immutable input, never its own last output.
+ const baselineJson=ctx.sceneJson||current?.json,baselineUrl=ctx.baseUrl||current?.result?.glb_url;
  const notify=(name,fn,schema,description)=>tool(async(args,config)=>{
   const run=toolQueue.catch(()=>{}).then(async()=>{
   const callId=config?.toolCall?.id||crypto.randomUUID();
@@ -25,13 +27,15 @@ export function createSceneTools(ctx){
   try {
    signal.throwIfAborted();
    if(ctx.finalizing)throw Error('本轮构建和关键帧检查已结束，请仅总结实际成功产物与仍存在的问题，不再调用工具。');
-   const value=await fn(args,callId);signal.throwIfAborted();
+   const usage=ctx.executionBudget?.consume('tools');if(usage&&!usage.allowed){ctx.finishReason='工具调用预算已用完，保留最近成功产物。';throw Error(ctx.finishReason);}
+   const value=await fn(args,callId);signal.throwIfAborted();ctx.executionBudget?.resetErrors();
    emit({type:'TOOL_CALL_END',toolCallId:callId});
    const content=value instanceof ToolMessage?(Array.isArray(value.content)?value.content.filter(p=>p.type==='text').map(p=>p.text).join('\n'):value.content):JSON.stringify(value);
    emit({type:'TOOL_CALL_RESULT',messageId:crypto.randomUUID(),toolCallId:callId,content});
    return value;
   }catch(error){
    if(signal.aborted)throw error;
+   const budget=ctx.executionBudget;if(budget){budget.consume('consecutiveErrors');if(name==='build_3D_scene')budget.consume('buildFailures');const used=budget.status();if(used.used.consecutiveErrors>=used.limits.consecutiveErrors||used.used.buildFailures>=used.limits.buildFailures)ctx.finishReason='本轮连续工具错误或构建失败预算已用完，请按已保存证据说明受阻原因。';}
    const result={status:'error',error:error.message};
    emit({type:'TOOL_CALL_END',toolCallId:callId,error:error.message});
    emit({type:'TOOL_CALL_RESULT',messageId:crypto.randomUUID(),toolCallId:callId,content:JSON.stringify(result),error:error.message});
@@ -48,17 +52,17 @@ export function createSceneTools(ctx){
  return [
   notify('x_list',args=>listWorkspace(dir,args,signal),z.object({path:directory,recursive:z.boolean().default(false),max_entries:z.number().int().min(1).max(1000).default(200)}),'List files and directories in this project workspace. Use / to discover scene.js, context.json and scene-api.txt. Returns virtual paths, types, file sizes and truncation status. Never accesses host files or symbolic links.'),
   notify('x_read',args=>readWorkspace(dir,args,signal),z.object({path:virtual,offset:z.number().int().nonnegative().default(0),column:z.number().int().min(0).max(32*1024*1024).default(0),limit:z.number().int().min(1).max(1000).default(300)}),'Read a workspace text file with 1-based line numbers. offset is a 0-based line offset; column is a 0-based character offset in the first line; limit is the maximum number of lines. Use for /context.json, /scene-api.txt and /scene.js. Returns totalLines, offset, content, truncated and, when truncated, a next:{offset,column} cursor to continue even a long line.'),
-  notify('x_write',async args=>{const result=await writeWorkspace(dir,args);if(args.path===(ctx.activeSourcePath||'/scene.js'))await noteSource(args.path);return result;},z.object({path:virtual,content:source,overwrite:z.boolean().default(false)}),'Write a scene program into the project workspace. Use self-contained function build(ctx), returning the documented scene JSON specification. No imports, Three.js calls, shell or network inside the program. Context and scene API files are read-only.'),
-  notify('x_edit',async args=>{const result=await editWorkspace(dir,args);if(args.path===(ctx.activeSourcePath||'/scene.js'))await noteSource(args.path);return result;},z.object({path:virtual,old_string:source,new_string:source,replace_all:z.boolean().default(false)}),'Apply an exact text edit to an existing scene program. Ambiguous matches are rejected. Read the current program before editing. Context and scene API files are read-only.'),
+  notify('x_write',async args=>{const result=await writeWorkspace(dir,args);if(args.path===(ctx.activeSourcePath||'/scene.js')||args.path===current?.result?.source)await noteSource(args.path);return result;},z.object({path:virtual,content:source,overwrite:z.boolean().default(false)}),'Write a scene program into the project workspace. Use self-contained function build(ctx), returning the documented scene JSON specification. No imports, Three.js calls, shell or network inside the program. Context and scene API files are read-only.'),
+  notify('x_edit',async args=>{const result=await editWorkspace(dir,args);if(args.path===(ctx.activeSourcePath||'/scene.js')||args.path===current?.result?.source)await noteSource(args.path);return result;},z.object({path:virtual,old_string:source,new_string:source,replace_all:z.boolean().default(false)}),'Apply an exact text edit to an existing scene program. Ambiguous matches are rejected. Read the current program before editing. Context and scene API files are read-only.'),
   notify('x_grep',args=>grepWorkspace(dir,args,signal),z.object({pattern:z.string().min(1).max(1000).describe('Literal text to search, not a regular expression.'),path:z.string().default('/').describe('Virtual workspace file or directory to search.'),case_sensitive:z.boolean().default(true),max_results:z.number().int().min(1).max(1000).default(100)}),'Find literal text in a workspace file or recursively in a directory. Returns matches with virtual path, 1-based line and text, plus truncated. Use to locate stable node IDs and code before x_read/x_edit. No regex or shell execution.'),
-  notify('coding_todo_write',async args=>({status:'completed',state:directorSummary(await (await director()).apply(args))}),codingTodoSchema,'Persist directing plan, outcome tasks and evidence-based reviews. op:read returns state; set_plan creates shots and criteria; update_tasks upserts tasks; record_reviews stores pass/fail/unverified observations separately. Mutations require unique requestId. A completed review may find failure. Evidence IDs must be issued by actual previews/builds, never invented.'),
+  notify('coding_todo_write',async args=>({status:'completed',state:directorSummary(await (await director()).apply(args))}),codingTodoToolSchema,'Persist directing plan, outcome tasks and evidence-based reviews. op:read returns state; set_plan creates shots and criteria; update_tasks upserts tasks; record_reviews stores pass/fail/unverified observations separately. Mutations require unique requestId. A completed review may find failure. Evidence IDs must be issued by actual previews/builds, never invented.'),
   notify('build_3D_scene',async({source:virtualPath})=>{
+   const buildBudget=ctx.executionBudget?.check('builds');if(buildBudget&&!buildBudget.allowed){ctx.finishReason='本轮交付构建预算已用完。';throw Error(ctx.finishReason);}
    if(!(await director()).state.plan)throw Error('Set a director plan before exporting. Source draft previews are available before build.');
-   ctx.activeSourcePath=virtualPath;
    const sourceCode=await fs.readFile((await workspaceTarget(dir,virtualPath)).file,'utf8');
-   const baseJson=current?.json||ctx.sceneJson;
+   const baseJson=baselineJson;
    const spec=await evaluateProgram(sourceCode,{scene:baseJson,reference:ctx.reference,assets:ctx.assets.map(({id,name,kind})=>({id,name,kind}))},signal);
-   const built=await renderCall('compile',{spec,baseUrl:current?.result?.glb_url||ctx.baseUrl,baseJson,assets:ctx.assets},signal);
+   const built=await renderCall('compile',{spec,baseUrl:baselineUrl,baseJson,assets:ctx.assets},signal);
    const bytes=Buffer.from(built.glb,'base64');if(bytes.length>MAX_GLB)throw Error('GLB exceeds 100 MiB');
    if(JSON.stringify(built.json).length>0x1400000)throw Error('Collaboration JSON exceeds limit');
    const taskId=crypto.randomUUID(),out=path.join(dir,'artifacts',taskId);await fs.mkdir(out,{recursive:true});
@@ -68,7 +72,8 @@ export function createSceneTools(ctx){
    await atomicWrite(path.join(out,'model.glb'),bytes);await atomicWrite(path.join(out,'collaboration.json'),JSON.stringify(built.json));
    await atomicWrite(path.join(out,'result.json'),JSON.stringify(result));
    await ctx.onBuild?.({result,json:built.json,bytes});
-   current={result,json:built.json};ctx.current=current;
+   current={result,json:built.json};ctx.current=current;ctx.activeSourcePath=virtualPath;
+   ctx.executionBudget?.consume('builds');
    ctx.completedBuilds=(ctx.completedBuilds||0)+1;ctx.previewChecks=[];
    await atomicWrite(path.join(dir,'latest-build.json'),JSON.stringify(current));
    if(ctx.director){const evidence=await ctx.director.registerBuild({taskId,sourceHash:result.source_sha256,baselineRevision:result.baseline_revision,json:built.json,artifactHash:result.glb_sha256});result.evidence_id=evidence.id;result.required_frames=ctx.director.snapshot().requiredFrames;}
@@ -77,16 +82,16 @@ export function createSceneTools(ctx){
   notify('preview_3D_scene',async({target,source:virtualPath,camera_id,time,frames},callId)=>{
    const selected=target||(current?'build':'draft');
    const requests=frames||[{camera_id,time}];
+   const frameBudget=ctx.executionBudget?.check(selected==='draft'?'draftFrames':'deliveryFrames',requests.length);if(frameBudget&&!frameBudget.allowed){ctx.finishReason='本轮预览帧预算已用完。';throw Error(ctx.finishReason);}
    let rendered,sourceHash,baselineRevision,taskId,sourceEvidence;
    if(selected==='draft'){
-    ctx.activeSourcePath=virtualPath;
-   const sourceCode=await fs.readFile((await workspaceTarget(dir,virtualPath)).file,'utf8');
-    const baseJson=current?.json||ctx.sceneJson;
+    const sourceCode=await fs.readFile((await workspaceTarget(dir,virtualPath)).file,'utf8');
+    const baseJson=baselineJson;
     sourceHash=sha256(sourceCode);
     const spec=await evaluateProgram(sourceCode,{scene:baseJson,reference:ctx.reference,assets:ctx.assets.map(({id,name,kind})=>({id,name,kind}))},signal);
     baselineRevision=sceneBinding(spec,baseJson);
-    rendered=await renderCall('draftPreview',{spec,baseUrl:current?.result?.glb_url||ctx.baseUrl,baseJson,assets:ctx.assets,frames:requests.map(f=>({cameraId:f.camera_id,time:f.time}))},signal);
-    taskId=crypto.randomUUID();
+    rendered=await renderCall('draftPreview',{spec,baseUrl:baselineUrl,baseJson,assets:ctx.assets,frames:requests.map(f=>({cameraId:f.camera_id,time:f.time}))},signal);
+    taskId=crypto.randomUUID();ctx.activeSourcePath=virtualPath;
     if(ctx.director)sourceEvidence=await ctx.director.registerDraft({sourceHash,baselineRevision,json:rendered.json});
    }else{
     if(!current)throw Error('No exported build exists. Use target:"draft" to preview source before building.');
@@ -94,6 +99,7 @@ export function createSceneTools(ctx){
     const bytes=await fs.readFile(path.join(dir,'artifacts',taskId,'model.glb'));
     rendered=await renderCall('previewBatch',{glb:bytes.toString('base64'),json:current.json,frames:requests.map(f=>({cameraId:f.camera_id,time:f.time}))},signal);
    }
+   ctx.executionBudget?.consume(selected==='draft'?'draftFrames':'deliveryFrames',requests.length);
    const out=path.join(dir,'artifacts',taskId);await fs.mkdir(out,{recursive:true});
    const saved=[],refs=[];
    for(const frame of rendered.frames){
