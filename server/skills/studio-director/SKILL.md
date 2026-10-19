@@ -25,6 +25,11 @@ a unique requestId; use the returned state revision as expectedRevision when
 available. Read `coding_todo_write({op:"read"})` or `/agent-state.json` after a
 conflict or recovery. This file is server-owned and read-only. A previous run's
 plan is context, not accepted work for this request.
+If a task update fails, read the saved state and repair that update. Do not
+continue with an empty task list. Final delivery needs completed implementation
+work with current evidence and completed review tasks covering every required
+criterion. Rendered frame IDs can prove implementation work; they do not by
+themselves turn a review into a pass.
 
 ## Make the action and image work
 
@@ -39,6 +44,12 @@ Look for visibility, framing, light, occlusion, scale and readable contact. A
 hand interaction needs the hand, object and other subject to meet in world space
 and remain visible in the relevant shot. Check action before, during and after
 the important beat; one still frame cannot establish motion.
+For numeric spatial requirements, verify coordinates and transformed positions
+from the implementation as well as the image. Perspective alone cannot prove
+an exact distance. Define each subject's local forward axis, check its world
+direction against the intended target, and check attached objects after parent
+transforms and animation. Seeing a face in the camera does not prove two
+subjects face each other. Record ambiguous or unmeasured results as unverified.
 
 Sample representative shot frames, action beats, both sides of a cut and the
 ending. Examine continuity, facing direction, contact and silhouette. Fix the

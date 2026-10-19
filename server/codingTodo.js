@@ -170,8 +170,8 @@ export class CodingTodo {
   const tasks=new Map(state.tasks.map(t=>[t.id,t])),criteria=new Set(state.plan.criteria.map(c=>c.id));
   const visit=(id,path=new Set())=>{if(path.has(id))throw Error('Task dependency cycle');const task=tasks.get(id);if(!task)throw Error(`Unknown dependency ${id}`);const next=new Set(path).add(id);for(const dep of task.dependsOn)visit(dep,next);};
   for(const task of state.tasks){
-   visit(task.id);for(const id of task.criterionIds)if(!criteria.has(id))throw Error(`Unknown criterion ${id}`);
-   for(const id of task.evidenceIds)if(!state.evidence.some(e=>e.id===id))throw Error(`Unknown server evidence ${id}`);
+   visit(task.id);for(const id of task.criterionIds)if(!criteria.has(id))throw Error(`Task ${task.id}: unknown criterion ${id}`);
+   for(const id of task.evidenceIds)if(!state.evidence.some(e=>e.id===id))throw Error(`Task ${task.id}: unknown server evidence ${id}. Use evidence IDs returned by preview_3D_scene or build_3D_scene.`);
    if(['blocked','cancelled'].includes(task.status)&&!task.note.trim())throw Error('Blocked or cancelled tasks require an explanation');
    // Completion records work actually performed. A later source edit makes its
    // evidence unsuitable for delivery, but does not erase that historical work
@@ -179,8 +179,14 @@ export class CodingTodo {
    if(task.status!=='completed'||!updatedIds.has(task.id))continue;
    if(task.dependsOn.some(dep=>tasks.get(dep)?.status!=='completed'))throw Error(`Complete dependencies before ${task.id}`);
    const evidence=task.evidenceIds.map(id=>state.evidence.find(e=>e.id===id)).filter(e=>this._validEvidence(state,e));
-   if(task.kind==='implement'&&!evidence.some(e=>e.kind==='draft'||e.kind==='build'))throw Error('Completed implementation needs a current source preview or build');
-   if(task.kind==='review'&&(!task.criterionIds.length||task.criterionIds.some(id=>!state.reviews.some(r=>r.criterionId===id&&r.planRevision===state.planRevision))))throw Error('Completed review needs recorded observations, which may pass, fail or remain unverified');
+   if(task.kind==='implement'&&!evidence.some(e=>['draft','build','frame'].includes(e.kind))){
+    const available=state.evidence.filter(e=>this._validEvidence(state,e)&&['draft','build','frame'].includes(e.kind)).slice(-8).map(e=>`${e.id} (${e.target} ${e.kind})`);
+    throw Error(`Task ${task.id}: completed implementation needs current draft, build or rendered frame evidence. Use evidence IDs returned by preview_3D_scene or build_3D_scene for the current source; stale evidence cannot complete this task. Available current evidence: ${available.join(', ')||'none; render the current source first'}.`);
+   }
+   if(task.kind==='review'){
+    const missing=task.criterionIds.filter(id=>!state.reviews.some(r=>r.criterionId===id&&r.planRevision===state.planRevision));
+    if(!task.criterionIds.length||missing.length)throw Error(`Task ${task.id}: missing recorded observations for criteria ${missing.length?missing.join(', '):'(no criterionIds supplied; provide the criteria inspected)'}. Use coding_todo_write with op:"record_reviews" for these criteria, then retry task completion. A review verdict may be pass, fail or unverified; task completion records inspection, not acceptance.`);
+   }
    if(task.kind==='deliver'&&!this._ready(state).ready)throw Error('Delivery acceptance has unresolved issues');
   }
  }
@@ -215,6 +221,13 @@ export class CodingTodo {
    const review=state.reviews.find(r=>r.criterionId===criterion.id&&r.planRevision===state.planRevision);
    if(review?.verdict!=='pass'||!this._coverage(state,criterion,this._reviewEvidence(state,review||{evidenceIds:[]},true)))reasons.push(`Unaccepted criterion: ${criterion.id}`);
   }
+  const implemented=state.tasks.some(task=>task.kind==='implement'&&task.status==='completed'&&task.evidenceIds.some(id=>{
+   const evidence=state.evidence.find(e=>e.id===id);
+   return ['draft','build','frame'].includes(evidence?.kind)&&this._validEvidence(state,evidence);
+  }));
+  if(!implemented)reasons.push('No completed implementation task with current source evidence; complete an implement task using current preview/build evidence IDs');
+  const inspected=new Set(state.tasks.filter(task=>task.kind==='review'&&task.status==='completed').flatMap(task=>task.criterionIds));
+  for(const criterion of state.plan.criteria.filter(c=>c.required))if(!inspected.has(criterion.id))reasons.push(`No completed review task for required criterion: ${criterion.id}; record its review, then complete a review task covering it`);
   for(const task of state.tasks)if(task.kind!=='deliver'&&!['completed','cancelled'].includes(task.status))reasons.push(`Unfinished task: ${task.id}`);
   const frames=state.evidence.filter(e=>e.kind==='frame'&&this._validEvidence(state,e,true));
   for(const sample of requiredFrames(state.plan))if(!frames.some(frame=>frame.cameraId===sample.camera_id&&Math.abs(frame.time-sample.time)<=1/30+.000001))reasons.push(`Missing final frame: ${sample.camera_id}@${sample.time}`);

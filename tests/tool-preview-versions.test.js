@@ -66,6 +66,10 @@ test('failed scratch preview does not hide edits to the accepted scene source',{
  const built=await invoke('build_3D_scene',{});assert.equal(built.status,'completed',built.error);
  const preview=await invoke('preview_3D_scene',{target:'build',frames:built.required_frames});assert.equal(preview.status,'completed',preview.error);
  assert.equal((await invoke('coding_todo_write',{op:'record_reviews',requestId:'accept',reviews:[{criterionId:'structure',verdict:'pass',evidenceIds:[built.evidence_id],observation:'服务端结构与当前 GLB 检查帧齐全'}]})).status,'completed');
+ assert.equal((await invoke('coding_todo_write',{op:'update_tasks',requestId:'delivery-tasks',tasks:[
+  {id:'implement',title:'实现并渲染当前源码',kind:'implement',status:'completed',evidenceIds:[built.evidence_id]},
+  {id:'review',title:'检查当前交付件',kind:'review',status:'completed',dependsOn:['implement'],criterionIds:['structure']},
+ ]})).status,'completed');
  assert.equal(ctx.director.ready().ready,true);
  const acceptedHash=ctx.director.state.currentSource.sourceHash;
  assert.equal((await invoke('x_write',{path:'/scratch.js',content:'function build(){ invalid syntax !!! }'})).status,'completed');

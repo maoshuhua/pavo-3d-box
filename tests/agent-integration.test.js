@@ -42,6 +42,7 @@ test('Deep Agents + director todo + draft preview + one accepted GLB build',{tim
   ['coding_todo_write',request=>{const state=latestTodo(request),draft=state.evidence.find(e=>e.kind==='draft');assert(draft,'draft registration must return server evidence');return {op:'update_tasks',requestId:'implementation-fixture',tasks:[{id:'implement',title:'编写并检查源码草稿',kind:'implement',status:'completed',dependsOn:[],criterionIds:[],evidenceIds:[draft.id],note:'已检查真实草稿帧'}]};}],
   ['build_3D_scene',{source:'/scene.js'}],['preview_3D_scene',{target:'build',frames:[0,1.5,3].map(time=>({camera_id:'camera',time}))}],['coding_todo_write',{op:'read'}],
   ['coding_todo_write',request=>{const state=latestTodo(request),build=state.evidence.find(e=>e.kind==='build'&&e.taskId===state.currentBuild.taskId),frames=state.evidence.filter(e=>e.kind==='frame'&&e.target==='build'&&e.taskId===state.currentBuild.taskId);assert(build);assert.equal(frames.length,3);return {op:'record_reviews',requestId:'acceptance-fixture',reviews:[{criterionId:'structure',verdict:'pass',evidenceIds:[build.id],observation:'服务端结构检查通过'},{criterionId:'appearance',verdict:'pass',evidenceIds:frames.map(f=>f.id),observation:'确定性测试固定场景实际帧已收到'},{criterionId:'motion',verdict:'pass',evidenceIds:frames.map(f=>f.id),observation:'三个时刻对应实际动作帧，自动化测试另比较像素变化'}]};}],
+  ['coding_todo_write',request=>{const state=latestTodo(request),frames=state.evidence.filter(e=>e.kind==='frame'&&e.target==='build'&&e.taskId===state.currentBuild.taskId);return {op:'update_tasks',requestId:'review-completed-fixture',tasks:[{id:'review',title:'检查交付件所有必需标准',kind:'review',status:'completed',dependsOn:['implement'],criterionIds:['structure','appearance','motion'],evidenceIds:frames.map(frame=>frame.id)}]};}],
  ];
  try{
   // A deterministic model fixture exercises real ChatOpenAI and Deep Agents.
@@ -76,6 +77,8 @@ test('Deep Agents + director todo + draft preview + one accepted GLB build',{tim
   assert.equal(events.slice(0,buildIndex).filter(e=>e.type==='PREVIEW'&&e.target==='draft').length,3);
   const acceptance=events.filter(e=>e.type==='DIRECTOR_STATE').at(-1)?.state;
   assert(acceptance?.acceptance?.ready,'final director state must retain accepted current-build evidence');
+  assert(acceptance.tasks.some(task=>task.kind==='implement'&&task.status==='completed'),'delivery requires completed implementation work');
+  for(const criterion of directorPlan.criteria.filter(c=>c.required))assert(acceptance.tasks.some(task=>task.kind==='review'&&task.status==='completed'&&task.criterionIds.includes(criterion.id)),`completed review task must cover ${criterion.id}`);
   const result=resultSchema.parse(events.find(e=>e.type==='RESULT').result);
   const glb=Buffer.from(await (await fetch(result.glb_url)).arrayBuffer());validateGlb(glb);assert.equal(glb.length,result.glb_size);
   assert.equal(crypto.createHash('sha256').update(glb).digest('hex'),result.glb_sha256);

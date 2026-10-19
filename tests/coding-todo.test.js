@@ -17,8 +17,13 @@ async function evidence(todo,{target='build',sourceHash='source-a',taskId='build
  const frames=await todo.registerFrames({...key,target,frames:times.map(time=>({camera_id:'camera',time,image_url:`/evidence/${target}-${time}.png`,width:1280,height:720}))});
  return {result,frames,key};
 }
-async function pass(todo,e,id='pass'){
- return todo.apply({op:'record_reviews',requestId:id,reviews:[{criterionId:'structure',verdict:'pass',evidenceIds:[e.result.id],observation:'Timeline and camera match the requested settings.'},{criterionId:'visible',verdict:'pass',evidenceIds:[e.frames[1]?.id??e.frames[0].id],observation:'The subject is visible in the shot.'},{criterionId:'motion',verdict:'pass',evidenceIds:e.frames.map(f=>f.id),observation:'Distinct sampled times show the intended movement.'}]});
+async function pass(todo,e,id='pass',{tasks=true}={}){
+ const result=await todo.apply({op:'record_reviews',requestId:id,reviews:[{criterionId:'structure',verdict:'pass',evidenceIds:[e.result.id],observation:'Timeline and camera match the requested settings.'},{criterionId:'visible',verdict:'pass',evidenceIds:[e.frames[1]?.id??e.frames[0].id],observation:'The subject is visible in the shot.'},{criterionId:'motion',verdict:'pass',evidenceIds:e.frames.map(f=>f.id),observation:'Distinct sampled times show the intended movement.'}]});
+ if(!tasks)return result;
+ return todo.apply({op:'update_tasks',requestId:`${id}:tasks`,tasks:[
+  {id:'implement-result',title:'Implement the requested source',kind:'implement',status:'completed',evidenceIds:[e.result.id]},
+  {id:'review-result',title:'Inspect required results',kind:'review',status:'completed',dependsOn:['implement-result'],criterionIds:['structure','visible','motion'],evidenceIds:e.frames.map(frame=>frame.id)},
+ ]});
 }
 
 test('one accepted exported build is sufficient and survives reopening',async t=>{
@@ -144,4 +149,71 @@ test('source corrections do not prevent adding work after an earlier implementat
  await todo.noteSource({sourceHash:'source-b',baselineRevision:'base-1'});
  await todo.apply({op:'update_tasks',requestId:'correction',tasks:[{id:'fix',title:'Correct the failed view',kind:'implement',status:'in_progress',dependsOn:['first']}]});
  assert.equal(todo.snapshot().tasks.find(t=>t.id==='first').status,'completed');assert.equal(todo.ready().ready,false);
+});
+
+test('implementation tasks accept current draft metadata and rendered frames without erasing failed inspections',async t=>{
+ const {todo}=await setup(t),e=await evidence(todo,{target:'draft'});
+ await todo.apply({op:'record_reviews',requestId:'motion-failed',reviews:[{criterionId:'motion',verdict:'fail',evidenceIds:e.frames.map(frame=>frame.id),observation:'The requested movement is not yet readable.'}]});
+ await todo.apply({op:'update_tasks',requestId:'implementation-results',tasks:[
+  {id:'t-impl-scene',title:'Create the scene source',kind:'implement',status:'completed',evidenceIds:[e.result.id]},
+  {id:'t-impl-motion',title:'Implement and render the motion',kind:'implement',status:'completed',dependsOn:['t-impl-scene'],evidenceIds:e.frames.map(frame=>frame.id)},
+ ]});
+ assert.deepEqual(todo.snapshot().tasks.map(task=>task.status),['completed','completed']);
+ assert.equal(todo.snapshot().reviews.find(review=>review.criterionId==='motion').verdict,'fail');
+ assert.equal(todo.ready().ready,false,'source implementation and failed inspection cannot certify delivery');
+ await todo.noteSource({sourceHash:'source-b',baselineRevision:'base-1'});
+ await assert.rejects(todo.apply({op:'update_tasks',requestId:'stale-motion',tasks:[{id:'t-impl-correction',title:'Correct the motion',kind:'implement',status:'completed',evidenceIds:e.frames.map(frame=>frame.id)}]}),error=>{
+  assert.match(error.message,/t-impl-correction/);assert.match(error.message,/draft, build or rendered frame evidence/);assert.match(error.message,/preview_3D_scene/);assert.match(error.message,/Available current evidence: none/);return true;
+ });
+ assert.equal(todo.snapshot().reviews.find(review=>review.criterionId==='motion').verdict,'fail');
+});
+
+test('implementation may close using an actual current exported frame',async t=>{
+ const {todo}=await setup(t),e=await evidence(todo);
+ await todo.apply({op:'update_tasks',requestId:'built-frame',tasks:[{id:'t-build-frame',title:'Render the implemented action',kind:'implement',status:'completed',evidenceIds:[e.frames[1].id]}]});
+ assert.equal(todo.snapshot().tasks[0].status,'completed');assert.equal(todo.ready().ready,false,'frame-backed task closure still requires final criterion acceptance');
+});
+
+test('review completion errors identify the task and missing criterion observations with a recovery action',async t=>{
+ const {todo}=await setup(t);
+ await todo.apply({op:'record_reviews',requestId:'motion-unverified',reviews:[{criterionId:'motion',verdict:'unverified',observation:'Motion could not be inspected yet.'}]});
+ await assert.rejects(todo.apply({op:'update_tasks',requestId:'review-missing',tasks:[{id:'t-review-action',title:'Inspect the action',kind:'review',status:'completed',criterionIds:['visible','motion']}]}),error=>{
+  assert.match(error.message,/Task t-review-action/);assert.match(error.message,/criteria visible\./);assert.match(error.message,/record_reviews/);assert.match(error.message,/pass, fail or unverified/);return true;
+ });
+ assert.equal(todo.snapshot().reviews[0].verdict,'unverified');
+ await assert.rejects(todo.apply({op:'update_tasks',requestId:'review-no-criteria',tasks:[{id:'t-review-empty',title:'Inspect the result',kind:'review',status:'completed'}]}),/t-review-empty.*no criterionIds supplied.*record_reviews/);
+});
+
+test('passing current reviews and frames cannot bypass an empty task list',async t=>{
+ const {todo}=await setup(t),e=await evidence(todo);await pass(todo,e,'reviews-only',{tasks:false});
+ assert.deepEqual(todo.snapshot().tasks,[]);assert.equal(todo.snapshot().reviews.length,3);
+ const acceptance=todo.ready();assert.equal(acceptance.ready,false);
+ assert.ok(acceptance.reasons.some(reason=>reason.includes('No completed implementation task')));
+ assert.ok(acceptance.reasons.some(reason=>reason.includes('review task for required criterion: motion')));
+ await assert.rejects(todo.finish('accepted'),/acceptance/);
+});
+
+test('completed review tasks must cover every required criterion and failure still blocks acceptance',async t=>{
+ const {todo}=await setup(t),e=await evidence(todo);await pass(todo,e,'reviews',{tasks:false});
+ await todo.apply({op:'update_tasks',requestId:'partial-task-coverage',tasks:[
+  {id:'implemented',title:'Implement the source',kind:'implement',status:'completed',evidenceIds:[e.frames[1].id]},
+  {id:'review-image',title:'Inspect structure and image',kind:'review',status:'completed',criterionIds:['structure','visible']},
+ ]});
+ assert.equal(todo.ready().ready,false);assert.ok(todo.ready().reasons.some(reason=>reason.includes('review task for required criterion: motion')));
+ await todo.apply({op:'record_reviews',requestId:'motion-problem',reviews:[{criterionId:'motion',verdict:'fail',evidenceIds:e.frames.map(frame=>frame.id),observation:'The motion inspection found a failure.'}]});
+ await todo.apply({op:'update_tasks',requestId:'motion-inspected',tasks:[{id:'review-action',title:'Inspect the action',kind:'review',status:'completed',criterionIds:['motion']}]});
+ assert.equal(todo.snapshot().tasks.find(task=>task.id==='review-action').status,'completed');
+ assert.equal(todo.ready().ready,false);assert.ok(todo.ready().reasons.some(reason=>reason==='Unaccepted criterion: motion'));
+ assert.ok(!todo.ready().reasons.some(reason=>reason.includes('No completed review task')));
+ await pass(todo,e,'motion-fixed',{tasks:false});assert.equal(todo.ready().ready,true);
+});
+
+test('historical completed work needs current source proof before a new delivery can pass',async t=>{
+ const {todo}=await setup(t),first=await evidence(todo);await pass(todo,first);assert.equal(todo.ready().ready,true);
+ await todo.noteSource({sourceHash:'source-b',baselineRevision:'base-1'});
+ const second=await evidence(todo,{sourceHash:'source-b',taskId:'build-2'});await pass(todo,second,'new-reviews',{tasks:false});
+ assert.equal(todo.snapshot().tasks.find(task=>task.id==='implement-result').status,'completed','earlier completed work remains historical');
+ assert.equal(todo.ready().ready,false);assert.ok(todo.ready().reasons.some(reason=>reason.includes('No completed implementation task with current source evidence')));
+ await todo.apply({op:'update_tasks',requestId:'current-proof',tasks:[{id:'implement-result',title:'Implement the requested source',kind:'implement',status:'completed',evidenceIds:[second.frames[1].id]}]});
+ assert.equal(todo.ready().ready,true);
 });
