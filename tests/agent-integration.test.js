@@ -23,19 +23,35 @@ after(()=>{for(const database of testDatabases)database.close();});
 function emptyGlb(){const json=Buffer.from(JSON.stringify({asset:{version:'2.0'},scene:0,scenes:[{nodes:[]}]}));const size=Math.ceil(json.length/4)*4;const b=Buffer.alloc(20+size,32);b.writeUInt32LE(0x46546c67,0);b.writeUInt32LE(2,4);b.writeUInt32LE(b.length,8);b.writeUInt32LE(size,12);b.writeUInt32LE(0x4e4f534a,16);json.copy(b,20);return b;}
 const emptyJson={version:1,entities:[{id:'world',kind:'world',state:{settings:{type:'solid',color:[.22,.24,.27],strength:2}}}],operations:[]};
 
-test('Deep Agents + seven tools + GLB/PNG + bounded visual review',{timeout:180000},async()=>{
+test('Deep Agents + director todo + draft preview + one accepted GLB build',{timeout:180000},async()=>{
  const projectId='test-'+crypto.randomUUID(),modelRequests=[];let api,server,renderHost;
- const previousPassLimit=process.env.AGENT_MAX_BUILD_PASSES;process.env.AGENT_MAX_BUILD_PASSES='3';
- const plan=[['x_list',{path:'/'}],['x_read',{path:'/scene-api.txt'}],['x_write',{path:'/scene.js',content:sceneSource,overwrite:true}],['x_grep',{pattern:'#ff7711',path:'/scene.js'}],['x_edit',{path:'/scene.js',old_string:'#ff7711',new_string:'#ee3344',replace_all:false}],
-  ...Array.from({length:3},()=>[['build_3D_scene',{source:'/scene.js'}],...[0,1.5,3].map(time=>['preview_3D_scene',{camera_id:'camera',time}])]).flat()];
+ const directorPlan={intent:'三秒单机位运动场景，红衣人物与跟拍机位可见',duration:3,aspectRatio:'16:9',
+  subjects:[{id:'runner',description:'带红色上衣的人物'}],constraints:[{id:'duration',description:'三秒、16:9',subjectIds:[]}],
+  shots:[{id:'shot',start:0,end:3,cameraRef:'camera',purpose:'显示人物运动',subjects:['runner'],action:'人物与相机移动',framing:'全景',movement:'跟随',criterionIds:['structure','appearance','motion']}],
+  criteria:[{id:'structure',description:'正确时长、切镜和画幅',kind:'structural',required:true,shotIds:['shot']},{id:'appearance',description:'人物和场景可见',kind:'visual',required:true,shotIds:['shot']},{id:'motion',description:'人物和相机在多个时刻改变位置',kind:'motion',required:true,shotIds:['shot']}],
+ };
+ const latestTodo=request=>{
+  for(const message of request.messages.filter(m=>m.role==='tool').reverse()){
+   try{const value=JSON.parse(message.content),state=value.state||value;if(state.plan&&Array.isArray(state.evidence))return state;}catch{}
+  }
+  throw Error('Fixture expected a real coding_todo_write state response');
+ };
+ const plan=[['x_list',{path:'/'}],['x_read',{path:'/scene-api.txt'}],['coding_todo_write',{op:'set_plan',requestId:'plan-fixture',plan:directorPlan}],
+  ['x_write',{path:'/scene.js',content:sceneSource,overwrite:true}],['x_grep',{pattern:'#ff7711',path:'/scene.js'}],['x_edit',{path:'/scene.js',old_string:'#ff7711',new_string:'#ee3344',replace_all:false}],
+  ['preview_3D_scene',{target:'draft',frames:[0,1.5,3].map(time=>({camera_id:'camera',time}))}],['coding_todo_write',{op:'read'}],
+  ['coding_todo_write',request=>{const state=latestTodo(request),draft=state.evidence.find(e=>e.kind==='draft');assert(draft,'draft registration must return server evidence');return {op:'update_tasks',requestId:'implementation-fixture',tasks:[{id:'implement',title:'编写并检查源码草稿',kind:'implement',status:'completed',dependsOn:[],criterionIds:[],evidenceIds:[draft.id],note:'已检查真实草稿帧'}]};}],
+  ['build_3D_scene',{source:'/scene.js'}],['preview_3D_scene',{target:'build',frames:[0,1.5,3].map(time=>({camera_id:'camera',time}))}],['coding_todo_write',{op:'read'}],
+  ['coding_todo_write',request=>{const state=latestTodo(request),build=state.evidence.find(e=>e.kind==='build'&&e.taskId===state.currentBuild.taskId),frames=state.evidence.filter(e=>e.kind==='frame'&&e.target==='build'&&e.taskId===state.currentBuild.taskId);assert(build);assert.equal(frames.length,3);return {op:'record_reviews',requestId:'acceptance-fixture',reviews:[{criterionId:'structure',verdict:'pass',evidenceIds:[build.id],observation:'服务端结构检查通过'},{criterionId:'appearance',verdict:'pass',evidenceIds:frames.map(f=>f.id),observation:'确定性测试固定场景实际帧已收到'},{criterionId:'motion',verdict:'pass',evidenceIds:frames.map(f=>f.id),observation:'三个时刻对应实际动作帧，自动化测试另比较像素变化'}]};}],
+ ];
  try{
   // A deterministic model fixture exercises real ChatOpenAI and Deep Agents.
   // It does not pretend to validate a paid model's reasoning or scene quality.
   api=http.createServer(async(req,res)=>{
    let body='';for await(const chunk of req)body+=chunk;const request=JSON.parse(body);modelRequests.push(request);
    const completed=request.messages.filter(m=>m.role==='tool').length;
-   // Keep asking to build forever unless the agent actually closes tool use.
-   const call=request.tool_choice==='none'?null:(plan[completed]||['build_3D_scene',{source:'/scene.js'}]),id='test-completion-'+completed;
+   const step=plan[completed],id='test-completion-'+completed;let call;
+   try{call=request.tool_choice==='none'||!step?null:[step[0],typeof step[1]==='function'?step[1](request):step[1]];}
+   catch(error){res.writeHead(400,{'Content-Type':'application/json'});res.end(JSON.stringify({error:{message:error.message,type:'fixture_error'}}));return;}
    const delta=call?{role:'assistant',tool_calls:[{index:0,id:'call-'+completed,type:'function',function:{name:call[0],arguments:JSON.stringify(call[1])}}]}:{role:'assistant',content:'已生成并检查地铁跑酷测试场景。'};
    if(request.stream){res.writeHead(200,{'Content-Type':'text/event-stream'});res.write(`data: ${JSON.stringify({id,object:'chat.completion.chunk',model:'test',created:1,choices:[{index:0,delta,finish_reason:null}]})}\n\n`);res.end(`data: ${JSON.stringify({id,object:'chat.completion.chunk',model:'test',created:1,choices:[{index:0,delta:{},finish_reason:call?'tool_calls':'stop'}]})}\n\ndata: [DONE]\n\n`);}
    else res.end(JSON.stringify({id,object:'chat.completion',created:1,model:'test',choices:[{index:0,message:delta,finish_reason:call?'tool_calls':'stop'}],usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2}}));
@@ -53,17 +69,27 @@ test('Deep Agents + seven tools + GLB/PNG + bounded visual review',{timeout:1800
   const error=events.find(e=>e.type==='RUN_ERROR');assert.equal(error,undefined,error?.message);
   assert(events.some(e=>e.type==='RUN_FINISHED'));
   assert.deepEqual(events.filter(e=>e.type==='TOOL_CALL_START').map(e=>e.toolCallName),plan.map(p=>p[0]));
-  assert.equal(modelRequests.at(-1).tool_choice,'none','bounded review must close tools through the real model transport');
+  assert.equal(modelRequests.at(-1).tool_choice,'none','accepted current build must close tools through the real model transport');
+  const results=events.filter(e=>e.type==='RESULT');assert.equal(results.length,1,'one accepted build is sufficient; successful builds are not a minimum quality count');
+  const draftIndex=events.findIndex(e=>e.type==='PREVIEW'&&e.target==='draft'),buildIndex=events.findIndex(e=>e.type==='RESULT');
+  assert(draftIndex>=0&&draftIndex<buildIndex,'source must be inspectable before the first exported result');
+  assert.equal(events.slice(0,buildIndex).filter(e=>e.type==='PREVIEW'&&e.target==='draft').length,3);
+  const acceptance=events.filter(e=>e.type==='DIRECTOR_STATE').at(-1)?.state;
+  assert(acceptance?.acceptance?.ready,'final director state must retain accepted current-build evidence');
   const result=resultSchema.parse(events.find(e=>e.type==='RESULT').result);
   const glb=Buffer.from(await (await fetch(result.glb_url)).arrayBuffer());validateGlb(glb);assert.equal(glb.length,result.glb_size);
   assert.equal(crypto.createHash('sha256').update(glb).digest('hex'),result.glb_sha256);
   const json=collaborationSchema.parse(await (await fetch(result.collaboration_url)).json());
   assert(json.entities.some(e=>e.id==='runner'));assert.equal(json.entities.find(e=>e.kind==='timeline').state.timeline.duration,3);
   assert.equal(json.entities.find(e=>e.id==='body').state.color,'#ee3344');
-  const preview=events.find(e=>e.type==='PREVIEW'&&e.time===1.5);assert(preview);const png=Buffer.from(await(await fetch(preview.image_url)).arrayBuffer());assert.equal(png.subarray(1,4).toString(),'PNG');
+  const preview=events.find(e=>e.type==='PREVIEW'&&e.target==='build'&&e.time===1.5);assert(preview);const png=Buffer.from(await(await fetch(preview.image_url)).arrayBuffer());assert.equal(png.subarray(1,4).toString(),'PNG');
   const sawVision=modelRequests.some(r=>r.messages.some(m=>Array.isArray(m.content)&&m.content.some(p=>p.type==='image_url')));assert(sawVision,'preview pixels must reach model');
-  const expectedTools=['x_list','x_read','x_write','x_edit','x_grep','preview_3D_scene','build_3D_scene'].sort();
-  assert(modelRequests.every(r=>JSON.stringify(r.tools.map(t=>t.function.name).sort())===JSON.stringify(expectedTools)),'every model request must expose exactly the seven supported tools');
+  const expectedTools=['x_list','x_read','x_write','x_edit','x_grep','preview_3D_scene','build_3D_scene','coding_todo_write'].sort();
+  assert(modelRequests.every(r=>JSON.stringify(r.tools.map(t=>t.function.name).sort())===JSON.stringify(expectedTools)),'every model request must expose exactly eight supported tools');
+  const skillMessages=modelRequests[0].messages.filter(m=>m.role==='system').map(m=>typeof m.content==='string'?m.content:JSON.stringify(m.content)).join('\n');
+  assert.match(skillMessages,/coding_todo_write/,'director tool contract must be present in the model context');
+  const checkpoint=await fs.readFile(path.join(projectDir(projectId),'sessions',events.find(e=>e.type==='SESSION').sessionId,'checkpoint.bin'));
+  assert(!checkpoint.includes(Buffer.from('data:image/png;base64,')),'preview pixel payloads must not be retained in checkpoints');
   for(const name of ['x_list','x_read','x_grep']){
    const start=events.find(event=>event.type==='TOOL_CALL_START'&&event.toolCallName===name);
    const value=JSON.parse(events.find(event=>event.type==='TOOL_CALL_RESULT'&&event.toolCallId===start.toolCallId).content);
@@ -76,7 +102,7 @@ test('Deep Agents + seven tools + GLB/PNG + bounded visual review',{timeout:1800
   assert.equal(patched.json.entities.find(e=>e.id==='body').state.color,'#0066ff');
   assert(patched.json.entities.some(e=>e.id==='coin-11'),'unrelated scene assets must survive patch');
   assert.equal(patched.json.entities.find(e=>e.kind==='timeline').state.timeline.duration,3);
- }finally{if(previousPassLimit===undefined)delete process.env.AGENT_MAX_BUILD_PASSES;else process.env.AGENT_MAX_BUILD_PASSES=previousPassLimit;await closeRenderer();if(server)await close(server);if(renderHost)await close(renderHost);if(api)await close(api);await fs.rm(projectDir(projectId),{recursive:true,force:true});}
+ }finally{await closeRenderer();if(server)await close(server);if(renderHost)await close(renderHost);if(api)await close(api);await fs.rm(projectDir(projectId),{recursive:true,force:true});}
 });
 
 test('server rejects missing model configuration and remote origins',async()=>{

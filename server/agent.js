@@ -68,15 +68,14 @@ export async function runDeepAgent(ctx,{model:injectedModel}={}){
    messages.push(new HumanMessage({content}));
   }
   messages.push(new HumanMessage({content:'当前导演计划、任务和证据摘要：'+JSON.stringify(directorSummary(ctx.director.snapshot()))}));
-  const configuredPasses=Number(process.env.AGENT_MAX_BUILD_PASSES||3);
-  const completed=reviewCompletion(ctx,Number.isInteger(configuredPasses)&&configuredPasses>=1&&configuredPasses<=10?configuredPasses:3);
+  const completed=reviewCompletion(ctx);
   const budget=stepBudget(getConfig()?.metadata?.langgraph_step);
   ctx.finalizing=!!completed||budget.exhausted;
   if(budget.exhausted){
    if(!ctx.current?.result)throw Error(stepLimitMessage(ctx,recursionLimit));
    messages.push(new HumanMessage({content:stepLimitMessage(ctx,recursionLimit)+'现在仅用中文总结实际成功产物，并明确列出未完成内容和未检查的机位、时间点；不得声称全部完成。'}));
   }
-  if(completed)messages.push(new HumanMessage({content:`本轮已完成 ${completed.builds} 次成功构建，最新产物 ${completed.taskId} 已实际检查起点、中段和结尾（${completed.times.join('、')}秒）。现在结束本轮工具调用，用中文简短总结实际已完成的内容，并如实列出剩余瑕疵或未验证事项。检查次数达到上限不代表视觉验收通过，不得隐瞒问题或宣称全部功能已通过。` }));
+  if(completed)messages.push(new HumanMessage({content:`当前交付件 ${completed.taskId} 的必需验收标准已提交当前版本证据。现在结束工具调用，简短总结实际结果；模型视觉判断不等同于自动质量认证。`}));
   const response=await handler({...request,messages,tools:request.tools.filter(t=>allowed.has(t.name)),...(ctx.finalizing?{toolChoice:'none'}:{})});
   if(ctx.finalizing&&response.tool_calls?.length)throw Error('模型在收尾时仍请求调用工具，已停止本轮执行。最近成功产物已保留；未完成的修改和检查不能视为通过。');
   return response;
@@ -112,7 +111,13 @@ export async function runDeepAgent(ctx,{model:injectedModel}={}){
    const text=typeof value==='string'?value:Array.isArray(value)?value.filter(x=>x.type==='text').map(x=>x.text||'').join(''):'';
    if(text)ctx.emit({type:'TEXT_MESSAGE_CONTENT',messageId:event.run_id,delta:text});
   }
- }}catch(error){
+ }
+ const accepted=!!reviewCompletion(ctx),outcome=accepted?'accepted':ctx.current?.result?'partial':'not_generated';
+ await ctx.director.finish(outcome,accepted?'':ctx.finishReason||'仍有未通过或未验证的标准，请查看任务与证据。');
+ if(!accepted)ctx.emit({type:'TEXT_MESSAGE_CONTENT',messageId:`${ctx.runId}:acceptance`,delta:'交付验收未全部通过：保留最近成功场景，缺失、失败或旧版本证据不计为完成。'});
+ return {outcome};
+ }catch(error){
+  await ctx.director.finish(ctx.signal.aborted?'cancelled':ctx.current?.result?'partial':'not_generated',error.message).catch(()=>{});
   if(error.name==='GraphRecursionError'||error.lc_error_code==='GRAPH_RECURSION_LIMIT')throw Error(stepLimitMessage(ctx,recursionLimit),{cause:error});
   throw error;
  }finally{await checkpoint.queue;}

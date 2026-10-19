@@ -63,7 +63,7 @@ export class AgentClient {
         item.director=event.state;this.save();onEvent();
       }
       if (event.type === 'RUN_ERROR') {failure = Error(event.message || 'Agent 生成失败。');this.state.runStatus='failed';if(this.state.activeRun)this.state.activeRun.status='failed';}
-      if (event.type === 'RUN_FINISHED') {finished = true;this.state.runStatus='completed';if(this.state.activeRun)this.state.activeRun.status='completed';}
+      if (event.type === 'RUN_FINISHED') {finished = true;this.state.runStatus='completed';if(this.state.activeRun){this.state.activeRun.status='completed';if(event.outcome)this.state.activeRun.outcome=event.outcome;}}
       if(event.type==='TOOL_CALL_START'){
         if(!this.state.messages.some(m=>m.id===event.toolCallId))this.state.messages.push({id:event.toolCallId,role:'tool',toolName:event.toolCallName,toolStatus:'running',text:`正在执行 ${event.toolCallName}`});
         this.save();onEvent();
