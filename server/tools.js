@@ -55,7 +55,7 @@ export function createSceneTools(ctx){
    if(JSON.stringify(built.json).length>0x1400000)throw Error('Collaboration JSON exceeds limit');
    const taskId=crypto.randomUUID(),out=path.join(dir,'artifacts',taskId);await fs.mkdir(out,{recursive:true});
    const prefix=`${BASE}/artifacts/${projectId}/${taskId}`;
-   const result={status:'completed',task_id:taskId,source:virtualPath,source_sha256:sha256(sourceCode),source_hash:sha256(sourceCode),glb_url:prefix+'/model.glb',collaboration_url:prefix+'/collaboration.json',glb_size:bytes.length,glb_sha256:sha256(bytes),triangles:built.triangles};
+   const result={status:'completed',task_id:taskId,source:virtualPath,source_sha256:sha256(sourceCode),source_hash:sha256(sourceCode),baseline_revision:sha256(JSON.stringify(baseJson)),glb_url:prefix+'/model.glb',collaboration_url:prefix+'/collaboration.json',glb_size:bytes.length,glb_sha256:sha256(bytes),triangles:built.triangles};
    // Publish only after both immutable files exist.
    await atomicWrite(path.join(out,'model.glb'),bytes);await atomicWrite(path.join(out,'collaboration.json'),JSON.stringify(built.json));
    await atomicWrite(path.join(out,'result.json'),JSON.stringify(result));
@@ -65,20 +65,34 @@ export function createSceneTools(ctx){
    await atomicWrite(path.join(dir,'latest-build.json'),JSON.stringify(current));
    emit({type:'RESULT',result});return result;
   },z.object({source:virtual.default('/scene.js')}),'Compile the workspace scene program into validated editable GLB and collaboration JSON. Returns completed/task_id/glb_url/collaboration_url/glb_size/glb_sha256/triangles. Each successful build is immediately delivered to the user. Fix source errors and rebuild if needed.'),
-  notify('preview_3D_scene',async({camera_id,time},callId)=>{
-   if(!current)throw Error('Build the scene before previewing it');
-   const duration=current.json.entities.find(e=>e.kind==='timeline')?.state.timeline.duration;
-   if(duration!==undefined&&time>duration)throw Error(`Time exceeds timeline duration ${duration}`);
-   const bytes=await fs.readFile(path.join(dir,'artifacts',current.result.task_id,'model.glb'));
-   const frame=await renderCall('preview',{glb:bytes.toString('base64'),json:current.json,cameraId:camera_id,time},signal);
-   const image=Buffer.from(frame.image,'base64'),filename=`preview-${crypto.randomUUID()}.png`;
-   await atomicWrite(path.join(dir,'artifacts',current.result.task_id,filename),image);
-   const data={status:'completed',task_id:current.result.task_id,camera_id:frame.cameraId,time:frame.time,width:frame.width,height:frame.height,image_url:`${BASE}/artifacts/${projectId}/${current.result.task_id}/${filename}`};
-   (ctx.previewChecks||=[]).push(data);
-   // Pixels go to the vision model; a localhost URL alone is not useful to it.
-   emit({type:'PREVIEW',...data});
-   return new ToolMessage({tool_call_id:callId,content:JSON.stringify(data),artifact:{previewImage:`data:image/png;base64,${frame.image}`,preview:data}});
-  },z.object({camera_id:z.string().optional().describe('Stable camera hf_id. Omit to use the first camera.'),time:z.number().min(0).max(600).default(0)}),'Render an actual frame of the latest built GLB at the requested camera and timeline time. Returns frame metadata plus image pixels for visual inspection. Check important motion beats and fix problems before final delivery.'),
+  notify('preview_3D_scene',async({target,source:virtualPath,camera_id,time,frames},callId)=>{
+   const selected=target||(current?'build':'draft');
+   const requests=frames||[{camera_id,time}];
+   let rendered,sourceHash,baselineRevision,taskId;
+   if(selected==='draft'){
+    const sourceCode=await fs.readFile((await workspaceTarget(dir,virtualPath)).file,'utf8');
+    const baseJson=current?.json||ctx.sceneJson;
+    sourceHash=sha256(sourceCode);baselineRevision=sha256(JSON.stringify(baseJson));
+    const spec=await evaluateProgram(sourceCode,{scene:baseJson,reference:ctx.reference,assets:ctx.assets.map(({id,name,kind})=>({id,name,kind}))},signal);
+    rendered=await renderCall('draftPreview',{spec,baseUrl:current?.result?.glb_url||ctx.baseUrl,baseJson,assets:ctx.assets,frames:requests.map(f=>({cameraId:f.camera_id,time:f.time}))},signal);
+    taskId=crypto.randomUUID();
+   }else{
+    if(!current)throw Error('No exported build exists. Use target:"draft" to preview source before building.');
+    sourceHash=current.result.source_sha256;baselineRevision=current.result.baseline_revision;taskId=current.result.task_id;
+    const bytes=await fs.readFile(path.join(dir,'artifacts',taskId,'model.glb'));
+    rendered=await renderCall('previewBatch',{glb:bytes.toString('base64'),json:current.json,frames:requests.map(f=>({cameraId:f.camera_id,time:f.time}))},signal);
+   }
+   const out=path.join(dir,'artifacts',taskId);await fs.mkdir(out,{recursive:true});
+   const saved=[],refs=[];
+   for(const frame of rendered.frames){
+    const filename=`preview-${crypto.randomUUID()}.png`;
+    await atomicWrite(path.join(out,filename),Buffer.from(frame.image,'base64'));
+    const data={status:'completed',target:selected,task_id:taskId,source_hash:sourceHash,baseline_revision:baselineRevision,camera_id:frame.cameraId,time:frame.time,width:frame.width,height:frame.height,image_url:`${BASE}/artifacts/${projectId}/${taskId}/${filename}`};
+    saved.push(data);refs.push({taskId,file:filename,cameraId:frame.cameraId,time:frame.time});
+    if(selected==='build')(ctx.previewChecks||=[]).push(data);
+    emit({type:'PREVIEW',...data});
+   }
+   return new ToolMessage({tool_call_id:callId,content:JSON.stringify(frames?{status:'completed',target:selected,frames:saved}:saved[0]),artifact:{previewRefs:refs}});
+  },z.object({target:z.enum(['draft','build']).optional().describe('draft previews current source without exporting or replacing the saved scene; build checks an exported GLB.'),source:virtual.default('/scene.js'),camera_id:z.string().optional(),time:z.number().min(0).max(600).default(0),frames:z.array(z.object({camera_id:z.string().optional(),time:z.number().min(0).max(600)})).min(1).max(12).optional()}),'Render actual source draft or exported build frames. Use target:draft before the first build to inspect and repair composition, motion and occlusion cheaply. Batch up to 12 camera/time samples. Explicit invalid camera IDs fail. Draft previews never publish a scene result or replace the saved project. Build previews verify the actual delivery artifact.'),
  ];
 }
-

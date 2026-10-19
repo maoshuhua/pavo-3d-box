@@ -10,17 +10,18 @@ async function getBrowser(){
  })().catch(e=>{browserPromise=null;throw Error('无法启动本地渲染器；请设置 AGENT_BROWSER_EXECUTABLE 或运行 npx playwright install chromium。',{cause:e});});
  return browserPromise;
 }
-export async function renderCall(method,args,signal){
+export async function renderCall(method,args,signal,{baseUrl=BASE,timeoutMs=90000}={}){
+ if(!['compile','preview','draftPreview','previewBatch'].includes(method))throw Error('Unknown scene renderer method');
  signal?.throwIfAborted();
  const browser=await getBrowser(), context=await browser.newContext({viewport:{width:960,height:540},deviceScaleFactor:1});
  const close=()=>context.close().catch(()=>{});signal?.addEventListener('abort',close,{once:true});
- const timer=setTimeout(close,90000);
+ const timer=setTimeout(close,timeoutMs);
  try {
   signal?.throwIfAborted();
   // Only the local scene runtime and uploaded assets can be loaded by this renderer.
-  await context.route('**/*',route=>{const url=route.request().url();return url.startsWith(BASE+'/')||url.startsWith('data:')||url.startsWith('blob:')?route.continue():route.abort();});
+  await context.route('**/*',route=>{const url=route.request().url();return url.startsWith(baseUrl+'/')||url.startsWith('data:')||url.startsWith('blob:')?route.continue():route.abort();});
   const page=await context.newPage();
-  await page.goto(BASE+'/runtime/renderer.html');
+  await page.goto(baseUrl+'/runtime/renderer.html');
   await page.waitForFunction(()=>Boolean(window.sceneEngine),{},{timeout:20000});
   const value=await page.evaluate(({method,args})=>window.sceneEngine[method](args),{method,args});
   signal?.throwIfAborted();return value;

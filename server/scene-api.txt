@@ -95,11 +95,12 @@ BUILD AND PREVIEW:
 build_3D_scene({source:"/scene.js"}) -- source is optional. Executes build(ctx), validates the spec,
  applies it to the current GLB/JSON baseline, and exports immutable local GLB/JSON artifacts.
  Returns {status:"completed",task_id,source,source_hash,source_sha256,glb_url,collaboration_url,glb_size,glb_sha256,triangles}.
-preview_3D_scene({camera_id,time:0}) -- camera_id is an optional stable camera id (defaults to first camera).
- time is in seconds and must fit the timeline. Restores the latest successful build and renders its actual animation.
- Returns {status:"completed",task_id,camera_id,time,width,height,image_url} plus image pixels for the next model call.
+preview_3D_scene({target:"draft",source:"/scene.js",frames:[{camera_id,time:0}]}) -- render source before any build, without exporting or replacing the saved scene. Batch 1-12 frames in one scene load.
+preview_3D_scene({target:"build",frames:[{camera_id,time:0}]}) -- check the actual most recent exported GLB. Legacy {camera_id,time} selects build when one exists, otherwise draft. Explicit invalid cameras fail.
+ time is in seconds and must fit the timeline. A missing camera_id follows the active timeline shot. A supplied camera must exist.
+ Returns actual camera/time/version/image metadata (or {frames:[...]}) plus image pixels for the next model call.
 
-Workflow: x_list/x_read/x_grep context/source → x_write/x_edit → build_3D_scene → preview_3D_scene at start/key actions/end → fix/rebuild/preview if needed → concise Chinese delivery.
+Workflow: x_list/x_read/x_grep context/source → x_write/x_edit → draft previews → fix source → build_3D_scene → build previews at cuts/key actions/end → concise Chinese delivery.
 The frontend keeps its existing tool status display, staging validation, scene/timeline update, and local GLB/JSON autosave/recovery; no new UI entry is needed.
 Build failures return status:error with an actionable message. Never claim completion after a failed build.
 preview returns actual PNG pixels to the model; inspect them before saying the scene is checked.

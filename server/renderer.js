@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
-import {GLTFExporter} from 'three/addons/exporters/GLTFExporter.js';
 import {createViewport,saveAsset,readGlb} from '/src/glb.js';
 import {assignEntityIds,entityId,entityKind,transformOf} from '/src/sceneEditor.js';
 import {namespaceImportedAsset} from '/src/importedAsset.js';
+import {timelineCameraId} from '/src/timelineCamera.js';
 
 const loader=new GLTFLoader();
 let viewer, details;
@@ -37,7 +37,7 @@ function applyMaterial(object,data){
  if(data.emissive)m.emissive.set(data.emissive);
  object.material=m;
 }
-async function compile({spec,baseUrl,baseJson,assets}){
+async function assembleScene({spec,baseUrl,baseJson,assets=[]}){
  const root=new THREE.Scene();let animations=[];
  if(spec.mode==='patch'&&baseUrl){const gltf=await parse(baseUrl);root.userData={...gltf.scene.userData};while(gltf.scene.children.length)root.add(gltf.scene.children[0]);animations=gltf.animations;}
  assignEntityIds(root,'agent');
@@ -84,26 +84,64 @@ async function compile({spec,baseUrl,baseJson,assets}){
  let timeline=spec.timeline;
  if(!timeline&&spec.mode==='patch')timeline=baseJson?.entities?.find(e=>e.kind==='timeline')?.state.timeline;
  if(timeline){for(const shot of timeline.shots)if(!map.get(shot.cameraId)?.isCamera)throw Error('Timeline camera not found: '+shot.cameraId);root.userData.blockingStudioTimeline=JSON.stringify(timeline);}
- const raw=await new GLTFExporter().parseAsync(root,{binary:true,onlyVisible:false,animations});
  const operations=structuredClone(spec.operations);
  for(const op of operations)if(op.kind==='object.create.from_glb'){
   const response=await fetch(op.payload.assetId);if(!response.ok)throw Error('Referenced GLB asset download failed');
   const bytes=await readGlb(new File([await response.blob()],'asset.glb')),id=crypto.randomUUID();
   await saveAsset({name:'agent-asset.glb'},bytes,id);op.payload.assetId=id;
  }
- const viewport=ensureViewer();
- await viewport.replaceAgentScene({bytes:raw,json:snapshot(root,world,timeline)},operations.map((op,i)=>({...op,sequence:i+1,status:'accepted',operationId:'agent-'+i})));
+ return {graph:{scene:root,animations},json:snapshot(root,world,timeline),operations};
+}
+async function loadDraft(args){
+ const assembled=await assembleScene(args),viewport=ensureViewer();
+ await viewport.replaceAgentScene({graph:assembled.graph,json:assembled.json},assembled.operations.map((op,i)=>({...op,sequence:i+1,status:'accepted',operationId:'agent-'+i})));
  viewport.seek(0);viewport.flushSceneEdits();
- const result=await viewport.exportSceneGlb();const json=viewport.exportSceneJson();
- let triangles=0;for(const node of root.children)node.traverse(o=>{if(o.isMesh)triangles+=(o.geometry.index?.count??o.geometry.attributes.position?.count??0)/3;});
- return {glb:await encode(result.blob),json,triangles:Math.round(triangles)};
+ return {viewport,json:viewport.exportSceneJson()};
+}
+async function compile(args){
+ const {viewport,json}=await loadDraft(args);
+ const result=await viewport.exportSceneGlb();
+ return {glb:await encode(result.blob),json,triangles:viewport.getTriangleCount()};
+}
+function validateFrames(frames){
+ if(!Array.isArray(frames)||!frames.length||frames.length>12)throw Error('Preview requires between 1 and 12 frames');
+ for(const frame of frames){
+  if(!frame||!Number.isFinite(frame.time)||frame.time<0)throw Error('Preview time must be a finite nonnegative number');
+  if(frame.cameraId!==undefined&&(typeof frame.cameraId!=='string'||!frame.cameraId))throw Error('Preview cameraId must be a nonempty string');
+ }
+}
+async function captureFrames(viewport,json,frames,target){
+ const timeline=json.entities.find(e=>e.kind==='timeline')?.state.timeline;
+ const cameras=json.entities.filter(e=>e.kind==='camera'&&!e.deleted);
+ const resolved=frames.map(({cameraId,time})=>{
+  if(Number.isFinite(timeline?.duration)&&time>timeline.duration)throw Error('Time exceeds timeline duration '+timeline.duration);
+  const id=cameraId??timelineCameraId(timeline?.shots||[],time,timeline?.duration??0);
+  const camera=id===null||id===undefined?cameras[0]:cameras.find(e=>e.id===id);
+  if(!camera)throw Error(id?'Preview camera not found: '+id:'Preview requires a camera');
+  const row=details.objects.find(o=>o.entityId===camera.id||o.id===camera.id);
+  if(!row)throw Error('Camera not found in loaded scene: '+camera.id);
+  return {row,cameraId:camera.id,time};
+ });
+ const captures=[];
+ for(const {row,cameraId,time} of resolved){
+  viewport.setCameraView(row.id);viewport.seek(time);
+  const frame=await viewport.renderCurrentFrame();
+  captures.push({image:await encode(frame.blob),width:frame.width,height:frame.height,cameraId,time,target});
+ }
+ return captures;
+}
+async function draftPreview(args){
+ validateFrames(args.frames);
+ const {viewport,json}=await loadDraft(args);
+ return {target:'draft',frames:await captureFrames(viewport,json,args.frames,'draft'),json};
+}
+async function previewBatch({glb,json,frames}){
+ validateFrames(frames);
+ const viewport=ensureViewer();await viewport.replaceAgentScene({bytes:decode(glb),json});
+ const actualJson=viewport.exportSceneJson();
+ return {target:'build',frames:await captureFrames(viewport,actualJson,frames,'build')};
 }
 async function preview({glb,json,cameraId,time}){
- const viewport=ensureViewer();await viewport.replaceAgentScene({bytes:decode(glb),json});
- const camera=json.entities.find(e=>e.kind==='camera'&&e.id===cameraId)||json.entities.find(e=>e.kind==='camera');
- if(!camera)throw Error('Preview requires a camera');
- const row=details.objects.find(o=>o.entityId===camera.id||o.id===camera.id);if(!row)throw Error('Camera not found in loaded scene');
- viewport.setCameraView(row.id);viewport.seek(time);
- const frame=await viewport.renderCurrentFrame();return {image:await encode(frame.blob),width:frame.width,height:frame.height,cameraId:camera.id,time};
+ return (await previewBatch({glb,json,frames:[{cameraId,time:time??0}]})).frames[0];
 }
-window.sceneEngine={compile,preview};
+window.sceneEngine={compile,preview,draftPreview,previewBatch};

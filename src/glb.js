@@ -1043,6 +1043,14 @@ export function createViewport(host, onDetails = () => {}, callbacks = {}) {
     },
     createExportScene,
     exportSceneGlb: serializeGlb,
+    getTriangleCount() {
+      let triangles = 0;
+      root.traverse((object) => {
+        if (object.isMesh)
+          triangles += (object.geometry.index?.count ?? object.geometry.attributes.position?.count ?? 0) / 3;
+      });
+      return Math.round(triangles);
+    },
     exportLocalMetadata: () => ({
       rootUserData: structuredClone(root.userData),
       assetNodeIds: editor.assetNodeIds(),
@@ -1116,9 +1124,14 @@ export function createViewport(host, onDetails = () => {}, callbacks = {}) {
     async restoreProject(snapshot, journal) {
       restoring = true;
       try {
-        if (snapshot?.bytes) {
-          const gltf = await loader.parseAsync(snapshot.bytes.slice(0), "");
+        if (snapshot?.bytes || snapshot?.graph) {
+          // The isolated renderer can hand over its assembled graph directly.
+          // Use the same restoration, animation and operation path as GLB input
+          // without exporting and parsing a temporary GLB for every draft.
+          const gltf = snapshot.graph ?? await loader.parseAsync(snapshot.bytes.slice(0), "");
           const model = gltf.scene;
+          if (!model?.isObject3D || !Array.isArray(gltf.animations))
+            throw new Error("场景图或动画数据无效。");
           root.userData = { ...model.userData };
           assignEntityIds(model);
           while (model.children.length) root.add(model.children[0]);
