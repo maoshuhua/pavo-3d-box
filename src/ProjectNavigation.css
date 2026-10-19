@@ -1,0 +1,40 @@
+/* libtv 135_pt__lyotm.css: project menu, navigation and monitor header. */
+.editor-projectDropdown{position:fixed;z-index:1200;width:200px;max-width:calc(100vw - 16px);overflow:auto;animation:project-menu-enter .15s ease;font-family:inherit}
+.editor-projectDropdown[data-open=false]{animation:project-menu-exit .15s ease forwards;pointer-events:none}
+.editor-projectDropdown .editor-projectMenuItem{display:flex;align-items:center;width:100%;border:0;background:transparent;text-align:left;font-family:inherit;cursor:pointer;outline:none}
+.editor-projectDropdown .editor-projectMenuItem:focus-visible{background:var(--canvas-controls-hover,#ffffff1a)}
+.editor-projectDropdown .editor-projectMenuItem:disabled{opacity:.5;cursor:not-allowed}
+.editor-projectMenuLabel{padding:6px 12px;font-size:12px;font-weight:500;line-height:16px;color:#ffffff66}
+.editor-projectMenuDivider{height:0;border:0;border-top:1px solid var(--canvas-controls-border,#363636)}
+.editor-projectNavigation{min-width:0;overflow:hidden}
+.editor-projectNavigation .editor-projectName,.editor-projectNavigation .editor-projectNameInput{flex:1;min-width:0;font-family:inherit}
+.editor-projectNavigation .editor-projectMenuTrigger:disabled,.editor-projectNavigation .editor-projectSidebarToggle:disabled{opacity:.5;cursor:default}
+.editor-projectNavigation button:focus-visible{outline:2px solid #35d5f5;outline-offset:-2px}
+.editor-projectDeleteOverlay{z-index:1201}
+@keyframes project-menu-enter{from{opacity:0}to{opacity:1}}
+@keyframes project-menu-exit{from{opacity:1}to{opacity:0}}
+@media(prefers-reduced-motion:reduce){.editor-projectDropdown{animation:none}.editor-projectDropdown[data-open=false]{opacity:0;animation:none}.editor-projectMenuChevron{transition:none}}
+.editor-projectNavigation{background:var(--canvas-controls-bg,#262626);max-width:100%;color:var(--canvas-controls-text,#fff);border-radius:12px;flex-shrink:0;align-items:center;gap:4px;margin-right:auto;padding:4px;display:flex}
+.editor-projectMenuTrigger,.editor-projectSidebarToggle{height:28px;color:inherit;cursor:pointer;background:0 0;border:0;border-radius:8px;flex-shrink:0;justify-content:center;align-items:center;gap:4px;padding:0 8px;display:flex}
+.editor-projectMenuTrigger:hover,.editor-projectSidebarToggle:hover{background:var(--canvas-controls-hover,#ffffff1a)}
+.editor-projectSidebarToggle{width:28px;padding:0}
+.editor-projectLogo{display:block;object-fit:contain}
+.editor-projectLogoIntl{width:23px;height:20px}
+.editor-projectMenuChevron{transition:transform .15s}
+.editor-projectMenuChevron[data-open]{transform:rotate(180deg)}
+.editor-projectName{min-width:0;max-width:240px;color:inherit;cursor:default;text-overflow:ellipsis;white-space:nowrap;background:0 0;border:0;border-radius:8px;padding:4px 8px;font-size:14px;font-weight:500;line-height:20px;overflow:hidden}
+.editor-projectName:not(:disabled):hover{background:var(--canvas-controls-hover,#ffffff1a)}
+.editor-projectNameInput{background:var(--canvas-controls-active,#ffffff24);width:240px;min-width:0;max-width:240px;color:inherit;text-overflow:ellipsis;white-space:nowrap;border:0;border-radius:8px;outline:0;padding:4px 8px;font-size:14px;font-weight:500;line-height:20px;overflow:hidden}
+.editor-projectNameInput:disabled{opacity:.65}
+.editor-projectNameInput::selection{background:var(--canvas-controls-selected,#ffffff3d)}
+.editor-projectMenu{border:.5px solid var(--canvas-controls-border,#363636);background:var(--canvas-controls-bg,#262626);box-shadow:var(--canvas-shadow-menu,0 8px 32px #0003);color:var(--canvas-controls-text,#fff);-webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px);border-radius:16px;padding:4px}
+.editor-projectMenu[data-region=intl]{min-width:200px;max-width:calc(100vw - 32px)}
+.editor-projectMenuItem{height:44px;color:inherit;border-radius:8px;padding:0 12px;font-size:14px;font-weight:500}
+.editor-projectMenuItem:hover,.editor-projectMenuItem[data-hovered]{background:var(--canvas-controls-hover,#ffffff1a)}
+.editor-projectMenuDivider{border-color:var(--canvas-controls-border,#363636);margin:2px 0}
+.editor-leftChrome,.editor-rightChrome{z-index:40;background:#262626;border-radius:12px;align-items:center;max-width:240px;height:36px;padding:4px;display:flex;position:absolute;top:12px}
+.editor-leftChrome{left:12px}
+.editor-leftChrome .editor-projectNavigation{background:0 0;min-width:0;padding:0}
+.editor-leftChrome[data-open=true]{width:var(--preview-left-panel-width,240px);max-width:var(--preview-left-panel-width,240px);background:#111;border-bottom:1px solid #ffffff14;border-right:1px solid #ffffff14;border-radius:0;height:48px;padding:6px 7px 6px 4px;top:0;left:0}
+.editor-leftChrome[data-open=true] .editor-projectNavigation{width:100%}
+.editor-leftChrome[data-open=true] .editor-projectSidebarToggle{margin-left:auto}

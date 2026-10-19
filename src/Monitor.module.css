@@ -1,0 +1,174 @@
+.monitorPanel {
+  z-index: 3;
+  top: 48px;
+  bottom: var(--preview-dock-height, 0px);
+  width: var(--preview-left-panel-width, 240px);
+  background: #111;
+  border-right: 1px solid #ffffff14;
+  flex-direction: column;
+  display: flex;
+  position: absolute;
+  left: 0;
+  overflow: hidden;
+}
+.monitorPanel[hidden] {
+  display: none;
+}
+.panelTitle {
+  color: #f0f0f1;
+  flex: 0 0 48px;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 12px;
+  font-size: 13px;
+  display: flex;
+}
+.monitorContent {
+  overscroll-behavior: contain;
+  flex: 1;
+  min-height: 0;
+  padding: 0 12px 12px;
+  overflow: hidden auto;
+}
+.monitorList {
+  flex-direction: column;
+  gap: 8px;
+  display: flex;
+}
+.monitorItem {
+  color: #ffffffa6;
+  text-align: left;
+  flex-direction: column;
+  gap: 4px;
+  display: flex;
+}
+.monitorItem:not([data-disabled]):not(.monitorItemSelected):hover
+  .monitorThumb {
+  border-color: #ffffff3d;
+}
+.monitorItem:not([data-disabled]):hover .monitorActions {
+  opacity: 1;
+  pointer-events: auto;
+}
+.monitorThumbButton {
+  cursor: pointer;
+  background: 0 0;
+  border: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  display: block;
+}
+.monitorThumbButton:disabled {
+  cursor: default;
+}
+.monitorItemSelected .monitorThumb {
+  border: 1.5px solid #fff;
+}
+.monitorThumb {
+  aspect-ratio: 16/9;
+  background: #141414;
+  border: 1px solid #ffffff14;
+  border-radius: 8px;
+  display: block;
+  position: relative;
+  overflow: hidden;
+}
+.monitorThumb img {
+  object-fit: contain;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.monitorActions {
+  z-index: 1;
+  border-radius: inherit;
+  opacity: 0;
+  pointer-events: none;
+  background: #0006;
+  justify-content: flex-end;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 8px;
+  transition: opacity 0.16s;
+  display: flex;
+  position: absolute;
+  inset: 0;
+}
+.monitorItem:not([data-disabled]):hover .monitorTopActions {
+  pointer-events: none;
+}
+.monitorItem:not([data-disabled]):hover .monitorTopActions .monitorEnterAction {
+  pointer-events: auto;
+}
+.monitorLocateAction,
+.monitorEnterAction {
+  -webkit-backdrop-filter: blur(32px);
+  backdrop-filter: blur(32px);
+  color: #fff;
+  cursor: pointer;
+  background: #ffffff1f;
+  border: 1px solid #ffffff1a;
+  border-radius: 8px;
+  align-items: center;
+  height: 32px;
+  display: flex;
+}
+.monitorLocateAction:disabled,
+.monitorEnterAction:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.monitorLocateAction {
+  justify-content: center;
+  width: 32px;
+}
+.monitorEnterAction {
+  min-width: 60px;
+  padding: 0 8px 0 10px;
+}
+.monitorEnterActionActive {
+  color: #101114;
+  background: #fff;
+  border-color: #0000;
+}
+.monitorEnterActionActive .monitorEnterLabel {
+  color: inherit;
+}
+.monitorEnterLabel {
+  color: #fff;
+  white-space: nowrap;
+  padding: 0 4px;
+  font-size: 13px;
+  line-height: 20px;
+}
+.monitorThumbEmpty {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.monitorLabel {
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  line-height: 16px;
+  overflow: hidden;
+}
+.composeIcon,
+.animationIcon,
+.monitorIcon {
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  display: block;
+}
+.composeIcon path,
+.animationIcon path,
+.monitorIcon path {
+  fill: currentColor;
+}
+.monitorIcon {
+  flex-basis: 16px;
+  width: 16px;
+  height: 16px;
+}
