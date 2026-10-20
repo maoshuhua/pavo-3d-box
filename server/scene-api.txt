@@ -1,44 +1,43 @@
-场景程序协议（本地实现，不是 LibTV 私有服务端 API）
+Scene program contract (local implementation, not libtv's private server API)
 
-编写 /scene.js，定义 function build(ctx) { return SPEC; }。不能使用 import、export 或 async。
-程序在 QuickJS 中运行，仅可使用 Math、JSON 等受支持的基础能力；可使用循环和辅助函数。
-ctx.scene 是当前协作 JSON，实体包含稳定的 id、kind、state。
-ctx.reference 是选中的实体或时间线片段，包含稳定 ID 和时间范围。
-ctx.assets 是上传文件描述列表 {id,name,kind}，其中 GLB 素材可以插入场景。
-可用工具只有 x_list、x_read、x_write、x_edit、x_grep、coding_todo_write、preview_3D_scene、build_3D_scene。
-使用 x_read 读取 /context.json 和 /scene-api.txt；已有源码位于 /scene.js。
-使用 x_list 定位文件，编辑前使用 x_grep 查找精确文本或稳定实体 ID。
-文件工具仅访问当前项目工作区中的 .js/.json/.txt/.md 文件；以 / 开头的路径是项目虚拟路径。
-拒绝磁盘绝对路径、父目录跳转（..）和符号链接；/context.json 与 /scene-api.txt 只读。
-单个文本文件读取上限为 32 MiB；x_read/x_grep 的文本输出上限为 64000 字符。
-目录扫描最多检查 10000 个条目、深入 64 层；达到输出或扫描限制时设置 truncated。
-结果截断时缩小目录、搜索范围或读取行范围，不能把部分结果当作完整结果。
-计划、任务、观察、说明和总结使用中文；工具名、字段名、枚举值、ID 和代码 API 标识保留原样。
+Write /scene.js defining function build(ctx) { return SPEC; }. No import/export or async.
+This runs in QuickJS with Math/JSON only. Loops and helper functions work.
+ctx.scene = current collaboration JSON (entities with stable id/kind/state).
+ctx.reference = selected entity or timeline clip, including stable id and times.
+ctx.assets = uploaded file descriptors {id,name,kind}; GLB assets can be inserted.
+The only model tools are x_list, x_read, x_write, x_edit, x_grep, preview_3D_scene, build_3D_scene.
+Read /context.json and /scene-api.txt with x_read. Existing source can be read at /scene.js.
+Use x_list to locate source files; use x_grep to find exact text or stable entity IDs before editing.
+File tools access only this project's workspace .js/.json/.txt/.md files. A leading / is a virtual project path.
+Disk absolute paths, parent traversal (..), and symlinks are rejected. /context.json and /scene-api.txt are read-only.
+Single text file reads are limited to 32 MiB. x_read/x_grep text output is limited to 64000 characters.
+Directory scans inspect at most 10000 entries and descend at most 64 levels; output/scan limits set truncated.
+When truncated, narrow the directory/search or read smaller line ranges; do not treat partial results as complete.
 
-文件工具：
-x_list({path:"/",recursive:false,max_entries:200}) -- 所有字段可选，max_entries 范围为 1..1000。
- 返回 {status:"completed",path,entries:[{path,type:"file"|"directory",bytes?}],truncated}。
-x_read({path,offset:0,column:0,limit:300}) -- offset 是从 0 开始的行偏移，column 是首个返回行内从 0 开始的字符偏移；limit 范围为 1..1000。
- 返回 {status:"completed",path,totalLines,offset,content,truncated,next?}，content 包含原文从 1 开始的行号。
- 仅在 truncated 为 true 时返回 next:{offset,column}，下一次 x_read 直接使用该游标。
- 该游标也能继续读取超过 64000 字符的单行；完整结果不含 next。
-x_write({path,content,overwrite:false}) -- 创建文本文件；覆盖已有文件须显式指定 overwrite，包含 UTF-8 字节校验，上限为 1 MiB。
- 返回 {status:"completed",path,bytes,sha256}。
-x_edit({path,old_string,new_string,replace_all:false}) -- 精确文本替换，默认要求唯一匹配。
- 返回 {status:"completed",path,replacements,sha256}。
-x_grep({pattern,path:"/",case_sensitive:true,max_results:100}) -- pattern 是非空字面文本，不是正则表达式。
- path 可以是文件或目录，目录搜索递归执行；max_results 范围为 1..1000。
- 返回 {status:"completed",pattern,path,matches:[{path,line,text,textOffset?,textTruncated?}],truncated}，line 从 1 开始。
- 长行只返回匹配附近片段，textOffset 表示该片段在原行中从 0 开始的字符偏移，textTruncated 为 true。
- 普通短行匹配不含 textOffset 和 textTruncated。
-上面的可选字段示例给出了默认值；工具错误返回 {status:"error",error}，检查并修正后再重试。
+FILE TOOLS:
+x_list({path:"/",recursive:false,max_entries:200}) -- all fields optional; max_entries 1..1000.
+ Returns {status:"completed",path,entries:[{path,type:"file"|"directory",bytes?}],truncated}.
+x_read({path,offset:0,column:0,limit:300}) -- offset is a zero-based line offset; column is a zero-based character offset in the first returned line; limit 1..1000.
+ Returns {status:"completed",path,totalLines,offset,content,truncated,next?}; content includes original 1-based line numbers.
+ Only when truncated is true, next:{offset,column} is returned; pass it directly into the next x_read call.
+ This cursor also resumes a single line longer than 64000 characters. Complete results omit next.
+x_write({path,content,overwrite:false}) -- create a text file; explicit overwrite required for an existing file; max 1 MiB, including UTF-8 byte validation.
+ Returns {status:"completed",path,bytes,sha256}.
+x_edit({path,old_string,new_string,replace_all:false}) -- exact text replacement; default requires one unique match.
+ Returns {status:"completed",path,replacements,sha256}.
+x_grep({pattern,path:"/",case_sensitive:true,max_results:100}) -- pattern is nonempty literal text, not regex.
+ path may name a file or directory; directory search is recursive; max_results 1..1000.
+ Returns {status:"completed",pattern,path,matches:[{path,line,text,textOffset?,textTruncated?}],truncated}; line is 1-based.
+ For a long line, text is a nearby excerpt containing the match; textOffset is its zero-based character position in the original line and textTruncated is true.
+ Ordinary short-line matches omit textOffset and textTruncated.
+Optional fields above show defaults. Tool errors return {status:"error",error}; inspect and fix before retrying.
 
-场景规范 SPEC：
+SPEC:
 {
  version:1,
- mode:"patch", // 默认保留已有物体与动画；只有明确新建整个场景时才使用 "replace"。
+ mode:"patch", // default; retain all existing objects/animations. "replace" only when explicitly creating a new scene.
  objects:[
-  {id:"stable-id", type:"mesh", name:"唯一且可读的名称", parentId:null,
+  {id:"stable-id", type:"mesh", name:"Unique readable name", parentId:null,
    transform:{position:[0,0,0],rotation:[0,0,0,1],scale:[1,1,1]}, visible:true,
    geometry:{type:"box",args:[width,height,depth]},
    material:{color:"#ffaa00",metallic:0,roughness:0.7}}
@@ -48,39 +47,40 @@ x_grep({pattern,path:"/",case_sensitive:true,max_results:100}) -- pattern 是非
  operations:[]
 }
 
-patch 中省略的可选节点字段保留已有值。
-已有 id 表示更新，新 id 必须指定 type；不能编造已有节点 ID，应读取 ctx.scene。
-parentId 引用另一个节点 ID，null 表示根节点；不能形成循环父子关系。
-rotation 是 XYZW 四元数，不是欧拉角；偏航旋转可用 [0,Math.sin(yaw/2),0,Math.cos(yaw/2)]。
-geometry 支持以下类型和参数：
- box [width,height,depth]；plane [width,height]；sphere [radius,widthSegments,heightSegments]；
- cylinder [radiusTop,radiusBottom,height,radialSegments]；cone [radius,height,radialSegments]；
- torus [radius,tube,radialSegments,tubularSegments]；capsule [radius,length,capSegments,radialSegments]；
- 任意程序化网格使用 buffer {type:"buffer",positions:[x,y,z,...],indices:[0,1,2,...]}。
-可以用多个命名部件分组建模；重复结构使用循环生成，不依赖固定场景模板。
-节点类型：
- group：作为可移动组合体的父节点，对组设置动画即可带动全部部件。
- mesh：创建时必须有 geometry；material 还可包含 baseColor:[r,g,b,a]、emissive:"#rrggbb"。
- camera：camera:{fov:50,near:0.05,far:1000,aspect:1.77777778}；lookAt:[x,y,z] 设置静态朝向。
- light：light:{type:"directional"|"point"|"spot",color:[1,1,1],intensity:3,castShadow:true,range:0,outerConeAngle:1,innerConeAngle:0}。
- asset：assetId 来自 ctx.assets 中 kind 为 glb 的条目；按组导入 GLB，保留几何和材质。
+All optional node fields omitted during a patch retain existing values.
+An existing id identifies an update. A new id requires type. Do not invent ids of existing nodes; read ctx.scene.
+parentId references another id; null means root. No cyclic parenting.
+rotation is XYZW quaternion, not Euler angles. Use [0,Math.sin(yaw/2),0,Math.cos(yaw/2)] for yaw.
+geometry types and args:
+ box [width,height,depth]; plane [width,height]; sphere [radius,widthSegments,heightSegments];
+ cylinder [radiusTop,radiusBottom,height,radialSegments]; cone [radius,height,radialSegments];
+ torus [radius,tube,radialSegments,tubularSegments]; capsule [radius,length,capSegments,radialSegments];
+ buffer {type:"buffer",positions:[x,y,z,...],indices:[0,1,2,...]} for arbitrary procedural meshes.
+Create detailed models by grouping many named parts. Use loops for repeated sleepers, coins, windows, pillars.
+Node types:
+ group: parent for movable assemblies; animate this group to move all its parts.
+ mesh: requires geometry on creation. material may also have baseColor:[r,g,b,a], emissive:"#rrggbb".
+ camera: camera:{fov:50,near:0.05,far:1000,aspect:1.77777778}; lookAt:[x,y,z] sets static orientation.
+ light: light:{type:"directional"|"point"|"spot",color:[1,1,1],intensity:3,castShadow:true,range:0,outerConeAngle:1,innerConeAngle:0}.
+ asset: assetId from ctx.assets of kind glb, imports that GLB as a group, preserving its geometry/materials.
 
-动画使用可编辑的烘焙采样，并包含在 GLB 中：
-{id:"subject-motion",name:"主体运动",duration:15,tracks:[
- {entityId:"subject",property:"position",times:[0,1,2],values:[0,0,0, 0,0,-5, 2,0,-10]},
- {entityId:"subject",property:"quaternion",times:[0,1],values:[0,0,0,1, 0,0,0,1]}
+Animations are baked samples, editable and included in GLB:
+{id:"run-motion",name:"Runner movement",duration:15,tracks:[
+ {entityId:"runner",property:"position",times:[0,1,2],values:[0,0,0, 0,0,-5, 2,0,-10]},
+ {entityId:"runner",property:"quaternion",times:[0,1],values:[0,0,0,1, 0,0,0,1]}
 ]}
-property 使用 position、quaternion 或 scale；times 严格递增且不超过 duration。
-values 是扁平数组，每个时间对应 3 个或 4 个数；同名动画替换已有动画。
-通过循环按 24fps 烘焙需要平滑表现的肢体、位移和跟拍动作，不能只设置首尾两个点。
-可用向量数学编写朝向目标的四元数辅助函数。相机沿局部 -Z 方向观察，Y 轴向上，使用右手坐标系。
+property is position/quaternion/scale. times increase strictly and fit duration.
+Values are flat arrays (3 or 4 numbers per time). Reuse animation name to replace an existing animation.
+Bake smooth runner limb animation, jump/slide and camera tracking at 24fps with loops, not just endpoints.
+Camera quaternion can be derived with your own look-at quaternion helper using vector math.
+Camera looks along local -Z, Y is up, right-handed world.
 
 world:{type:"solid",color:[0.22,0.24,0.27],strength:2}
 timeline:{version:1,duration:15,shots:[{cameraId:"camera-id",start:0,end:15}]}
-所有新场景都设置相机 aspect 和 timeline，至少有一个命名相机和足够的照明。
-修改选中片段时使用 reference.entityId/cameraId 及 start/end，保留无关节点和镜头。
+Set camera aspect and timeline for all new scenes. At least one named camera and sufficient lighting.
+For patching a selected clip, use reference.entityId/cameraId and start/end, preserve unrelated nodes and shots.
 
-operations 支持经过校验的 LibTV 协作操作，结构为 (entityId,kind,payload)：
+operations accepts validated libtv collaboration operations (entityId,kind,payload):
 entity.transform.set/object.transform.set/camera.transform.set:{transform:{position:[x,y,z],rotation:[x,y,z,w],scale:[x,y,z]}}
 entity.rename/object.rename:{name}; entity.delete/object.delete:{}
 camera.projection.set:{projection:{type:"perspective",verticalFov:radians,near,far}}
@@ -89,32 +89,17 @@ timeline.shots.set:{timeline:{version:1,duration,shots:[{cameraId,start,end}]}}
 object.material.set:{material:{baseColor:[r,g,b,a],metallic,roughness}}
 light.properties.set:{properties:{type:"directional"|"point"|"spot",color:[r,g,b],intensity,castShadow}}
 camera.rig.set:{rig:{aspect:number|null,dofFocusName:string|null,path:null,animation:{name,duration,times,positions,quaternions}}}
-可编辑相机路径的 path 也可以是 {id,name,transform,settings,waypoints:[{id,name,transform}],anchor:null,aim:null,focus:null,focusParent:"path"}；animation 可以为 null。
+For editable camera paths, path may instead be {id,name,transform,settings,waypoints:[{id,name,transform}],anchor:null,aim:null,focus:null,focusParent:"path"}; animation may be null.
 
-构建与预览：
-build_3D_scene({source:"/scene.js"}) -- source 可选；执行 build(ctx)、校验场景规范，以当前 GLB/JSON 为基线生成不可变的本地 GLB/JSON 产物。
- 返回 {status:"completed",task_id,source,source_hash,source_sha256,glb_url,collaboration_url,glb_size,glb_sha256,triangles,evidence_id,checks,required_frames,missing_frames}。
- 每次成功构建立即展示可播放版本，随后继续视觉验收；源码、求值结果和基线未变化且文件校验通过时，复用同一导出与证据，返回 reused:true。
-preview_3D_scene({target:"build"}) -- 默认只捕获当前 GLB 缺失的最小覆盖帧，每批最多 12 帧；仅在返回 missing_frames 非空时继续补必需帧。
-preview_3D_scene({target:"build",frames:[{camera_id,time:0}]}) -- 检查精确动作节拍；target 默认 build，必须已有导出 GLB；显式指定不存在的相机会报错。
- 当前构建、相机和时间完全相同时复用原图与证据，不消耗渲染帧预算，返回 rendered_count/reused_count；同批重复采样只保留一次。
-preview_3D_scene({target:"draft",source:"/scene.js",frames:[{camera_id,time:0}]}) -- 可选源码调试，不替换已保存场景；不能成为首次构建前置步骤，也不能证明最终交付通过。
- time 单位为秒，必须在时间线范围内；省略 camera_id 时选择当前时间生效的时间线机位，显式指定的相机必须存在。
- 返回真实相机、时间、版本、图像元数据（批量时为 {frames:[...]}），以及 source_evidence_id、missing_frames 和供下一次模型调用检查的图像像素。
+BUILD AND PREVIEW:
+build_3D_scene({source:"/scene.js"}) -- source is optional. Executes build(ctx), validates the spec,
+ applies it to the current GLB/JSON baseline, and exports immutable local GLB/JSON artifacts.
+ Returns {status:"completed",task_id,source,source_hash,source_sha256,glb_url,collaboration_url,glb_size,glb_sha256,triangles}.
+preview_3D_scene({camera_id,time:0}) -- camera_id is an optional stable camera id (defaults to first camera).
+ time is in seconds and must fit the timeline. Restores the latest successful build and renders its actual animation.
+ Returns {status:"completed",task_id,camera_id,time,width,height,image_url} plus image pixels for the next model call.
 
-默认流程：读取上下文和源码 → set_plan 合并初始任务 → x_write/x_edit → build_3D_scene 先展示 → 检查 GLB 预览 → record_reviews 合并任务更新 → 集中修正必需问题 → 重新构建并检查当前版本 → 中文交付总结。
-默认预算为首次构建加两轮修正，以返回的执行预算为准；未解决标准必须返回部分完成，不能编造通过结论。
-前端保留工具状态、分阶段校验、场景和时间线更新，以及本地 GLB/JSON 自动保存与恢复，不需要新入口。
-构建失败返回 status:error 和可操作原因；不能在构建失败后宣称完成。预览向模型提供真实 PNG 像素，必须检查后才能宣称画面已核验。
-
-导演与待办：
-studio-director 导演技能已加载；/skills/studio-director/SKILL.md 和 /agent-state.json 只读。
-coding_todo_write({op:"set_plan",requestId:"unique-plan",plan:{intent,duration,aspectRatio,subjects:[{id,description}],constraints:[{id,description,subjectIds:[]}],shots:[{id,start,end,cameraRef,purpose,subjects:[],action,framing,movement,criterionIds:[]}],criteria:[{id,description,kind:"structural"|"visual"|"motion",required:true,shotIds:[]}]}})
-分镜连续覆盖 0 到 duration；cameraRef 匹配实际稳定相机 ID。不能遗漏用户明确要求，也不能在本轮删除或削弱已有必需标准。
-coding_todo_write({op:"update_tasks",requestId:"unique-tasks",tasks:[{id,title,kind:"plan"|"implement"|"review"|"deliver",status:"pending"|"in_progress"|"completed"|"blocked"|"cancelled",dependsOn:[],criterionIds:[],evidenceIds:[],note:""}]})
-coding_todo_write({op:"record_reviews",requestId:"unique-review",reviews:[{criterionId,verdict:"pass"|"fail"|"unverified",evidenceIds:[],observation:"真实观察"}]})
-set_plan 可包含 tasks，格式与 update_tasks 相同；优先一次提交计划和初始任务。
-record_reviews 可包含 tasks；先校验审查，再将观察与已完成审查或修正任务原子提交。任一任务或审查无效时整批拒绝，不保存部分变更。
-coding_todo_write({op:"read"}) 返回 revision、plan、tasks、reviews、missingFrames 和当前可用证据；成功变更响应也包含这些摘要，仅在冲突或恢复时额外读取。变更可带 expectedRevision，过期值会被拒绝。不同变更使用不同 requestId，相同变更重试保持原 requestId。
-实现任务完成需要当前源码、构建或帧证据；审查完成只表示检查已经执行，不代表所有标准通过。失败观察必须保留，并与修正任务一起提交。
-最终验收需要当前导出构建证据；结构标准引用构建 evidence_id，视觉标准需要各相关镜头的当前帧，运动标准需要各相关镜头至少两个不同时间的当前帧。required_frames 的最小覆盖是每镜头一个代表时刻，或必需运动镜头的两个边界时刻；按需追加关键动作采样以证明预期行为。源码、计划或构建变化会使旧验收失效。不能在实际检查前完成所有任务；blocked 任务必须说明具体原因。
+Workflow: x_list/x_read/x_grep context/source → x_write/x_edit → build_3D_scene → preview_3D_scene at start/key actions/end → fix/rebuild/preview if needed → concise Chinese delivery.
+The frontend keeps its existing tool status display, staging validation, scene/timeline update, and local GLB/JSON autosave/recovery; no new UI entry is needed.
+Build failures return status:error with an actionable message. Never claim completion after a failed build.
+preview returns actual PNG pixels to the model; inspect them before saying the scene is checked.

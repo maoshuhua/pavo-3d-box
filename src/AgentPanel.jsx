@@ -2,7 +2,6 @@ import React,{useEffect,useLayoutEffect,useRef,useState} from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import './AgentPanel.css';
-import DirectorProgress from './DirectorProgress.jsx';
 import {SketchIcon} from './MotionAnnotation.jsx';
 import {useComposerInteraction,useComposerMorph} from './useComposerCollapse.js';
 import {useComposerPosition} from './agentFloatingLayout.js';
@@ -21,7 +20,6 @@ export default function AgentPanel({client,reference,disabled,running,onGenerate
  const interaction=useComposerInteraction(form),compact=useComposerMorph(form,interaction.compact,hidden),expand=interaction.pin;
  const position=useComposerPosition(form,left,right,compact,null,floatingLayout,hidden,16);
  const minimum=Math.min(56,maximum),actualHeight=Math.max(minimum,Math.min(height,maximum));
- const visibleMessages=client.state.messages.filter(message=>!message.modelStatus&&message.toolName!=='模型响应');
  useLayoutEffect(()=>{const update=()=>{const area=inputArea.current?.offsetHeight||124;floatingLayout?.setComposer({minimumHeight:area+56});setMaximum(Math.max(0,Math.min(540,window.innerHeight-bottom-72-area,(compact?Infinity:floatingLayout?.getSnapshot().composerHeightLimit??Infinity)-area)))};update();const observer=new ResizeObserver(update);if(inputArea.current)observer.observe(inputArea.current);const unsubscribe=floatingLayout?.subscribe(update);window.addEventListener('resize',update);return()=>{observer.disconnect();unsubscribe?.();window.removeEventListener('resize',update)}},[bottom,compact,floatingLayout]);
  useLayoutEffect(()=>{if(!compact&&!hidden&&nearBottom.current&&messages.current)messages.current.scrollTop=messages.current.scrollHeight});
  useEffect(()=>{if(running)expand()},[running,expand]);
@@ -47,7 +45,7 @@ export default function AgentPanel({client,reference,disabled,running,onGenerate
  const endResize=e=>{if(drag.current?.id!==e.pointerId)return;drag.current=null;if(e.currentTarget.hasPointerCapture(e.pointerId))e.currentTarget.releasePointerCapture(e.pointerId)};
  return <>
  <form ref={form} {...interaction.formProps} hidden={hidden} className="agent-composer" data-cn data-compact={compact} data-running={running||undefined} data-anchor={position.anchor} data-sliding={position.sliding||undefined} aria-label="Agent 对话" style={{bottom:Math.max(16,bottom+16),'--preview-left-width':`${left}px`,'--preview-right-width':`${right}px`,'--preview-composer-slide':`${position.offset}px`}} onSubmit={submit} onDragOver={e=>{if(e.dataTransfer.types.includes('Files')){e.preventDefault();e.stopPropagation()}}} onDrop={e=>{if(e.dataTransfer.files.length){e.preventDefault();e.stopPropagation();addFiles(e.dataTransfer.files)}}}>
-  {!compact&&(visibleMessages.length>0||error||running)&&<section className="agent-history" aria-label="对话历史" style={{height:actualHeight}}>
+  {!compact&&(client.state.messages.length>0||error||running)&&<section className="agent-history" aria-label="对话历史" style={{height:actualHeight}}>
    <header className="agent-historyHeader" {...position.handleProps}>
     <div className="agent-resizeHandle" role="separator" tabIndex={0} aria-label="调整对话高度" aria-orientation="horizontal" aria-valuemin={minimum} aria-valuemax={maximum} aria-valuenow={actualHeight}
      onKeyDown={e=>{const next={ArrowUp:actualHeight+24,ArrowDown:actualHeight-24,Home:minimum,End:maximum}[e.key];if(next!==undefined||e.key==='Enter'){e.preventDefault();e.stopPropagation();if(e.key==='Enter')interaction.collapse();else setHeight(Math.max(minimum,Math.min(maximum,next)))}}}
@@ -57,8 +55,7 @@ export default function AgentPanel({client,reference,disabled,running,onGenerate
     <p className="agent-projectTitle">{title||'3D-BOX'}</p><button type="button" className="agent-iconButton agent-collapseButton" aria-label="收起对话" aria-expanded={!compact} onClick={interaction.collapse}><CollapseConversationIcon/></button>
    </header>
    <div className="agent-messages" ref={messages} role="log" aria-live="polite" onScroll={e=>{nearBottom.current=e.currentTarget.scrollHeight-e.currentTarget.scrollTop-e.currentTarget.clientHeight<48}}>
-    {visibleMessages.map(m=><div key={m.id} className="agent-message" data-role={m.role} data-tool-status={m.toolStatus} role={m.role==='tool'?'status':undefined}>
-     {m.director&&<DirectorProgress state={m.director}/>}
+    {client.state.messages.map(m=><div key={m.id} className="agent-message" data-role={m.role} data-tool-status={m.toolStatus} role={m.role==='tool'?'status':undefined}>
      {m.reference&&<span className="agent-selectionTag agent-messageReference">{m.reference.label}</span>}
      {m.role==='assistant'?<Markdown remarkPlugins={[remarkGfm]} components={{a:({node,...props})=><a {...props} target="_blank" rel="noopener noreferrer"/>}}>{m.text}</Markdown>:<div>{m.role==='tool'&&<svg className="agent-toolIcon" width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m7 10 5 5a3 3 0 0 0 4-4L9 4a4 4 0 0 0-6 6l8 8M7 6l7 7"/></svg>}{m.text}</div>}
      {m.attachments?.map((f,i)=><MessageAttachment key={i} file={f}/>)}

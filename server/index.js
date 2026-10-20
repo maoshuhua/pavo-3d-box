@@ -74,10 +74,10 @@ export function createServer({runAgent=runDeepAgent,requireConfiguration=true,da
    const job=(async()=>{
     const timer=setTimeout(()=>controller.abort(new Error('Agent run exceeded time limit')),Number(process.env.AGENT_RUN_TIMEOUT_MS||900000));
     try{
-     const completion=await runAgent({dir,projectId,sessionId,runId,messageId:userMessage.id,prompt:payload.prompt,reference:payload.reference,generationSettings:payload.generationSettings,sceneJson,assets,baseUrl:`${BASE}/artifacts/${projectId}/${inputId}/input.glb`,emit,onBuild,signal:controller.signal,
+     await runAgent({dir,projectId,sessionId,runId,messageId:userMessage.id,prompt:payload.prompt,reference:payload.reference,generationSettings:payload.generationSettings,sceneJson,assets,baseUrl:`${BASE}/artifacts/${projectId}/${inputId}/input.glb`,emit,onBuild,signal:controller.signal,
       writeContext:async(context,api)=>{await atomicWrite(sourcePath(dir,'/context.json'),JSON.stringify(context,null,2));await atomicWrite(sourcePath(dir,'/scene-api.txt'),api);}});
-     controller.signal.throwIfAborted();studio.store.db.prepare("UPDATE runs SET status='completed',updated_at=? WHERE id=?").run(Date.now(),runId);emit({type:'RUN_FINISHED',...(completion?.outcome?{outcome:completion.outcome}:{})});
-    }catch(error){const directorState=await readJson(path.join(dir,'workspace','agent-state.json'),null).catch(()=>null);if(directorState?.runId===runId)channel.publish(sessionId,runId,{type:'DIRECTOR_STATE',state:directorState});const frame={type:'RUN_ERROR',message:error.message};studio.store.db.prepare("UPDATE runs SET status='failed',updated_at=? WHERE id=?").run(Date.now(),runId);const persisted=channel.publish(sessionId,runId,frame);logQueue=logQueue.catch(()=>{}).then(()=>fs.appendFile(logFile,JSON.stringify(persisted)+'\n'));}
+     controller.signal.throwIfAborted();studio.store.db.prepare("UPDATE runs SET status='completed',updated_at=? WHERE id=?").run(Date.now(),runId);emit({type:'RUN_FINISHED'});
+    }catch(error){const frame={type:'RUN_ERROR',message:error.message};studio.store.db.prepare("UPDATE runs SET status='failed',updated_at=? WHERE id=?").run(Date.now(),runId);const persisted=channel.publish(sessionId,runId,frame);logQueue=logQueue.catch(()=>{}).then(()=>fs.appendFile(logFile,JSON.stringify(persisted)+'\n'));}
     finally{clearTimeout(timer);await logQueue.catch(()=>{});runs.delete(runId);projects.delete(projectId);}
    })();runs.get(runId).job=job;
   }catch(error){

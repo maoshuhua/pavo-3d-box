@@ -17,7 +17,7 @@ export async function workspaceTarget(dir,virtualPath,{directory=false,write=fal
  const parts=normalized==='/'?[]:normalized.slice(1).split('/');
  if(parts.some((part,i)=>DEVICE.test(part)||!(directory||i<parts.length-1?DIRECTORY:FILE).test(part)))throw Error('Only virtual .js/.json/.txt/.md workspace paths and directories are allowed');
  if(!directory&&!parts.length)throw Error('A workspace file path is required');
- if(write&&(['/context.json','/scene-api.txt','/agent-state.json'].includes(normalized.toLowerCase())||normalized.toLowerCase().startsWith('/skills/')))throw Error('Context, director state and skill files are read-only');
+ if(write&&['/context.json','/scene-api.txt'].includes(normalized.toLowerCase()))throw Error('Context and scene API files are read-only');
  const root=path.resolve(dir,'workspace');
  const file=directory?path.resolve(root,...parts):sourcePath(dir,normalized);
  if(file!==root&&!file.startsWith(root+path.sep))throw Error('Invalid workspace path');

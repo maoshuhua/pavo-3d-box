@@ -27,11 +27,7 @@ test('step budget measures this run, reserving finalization steps across old che
  assert.equal(fallback(undefined).exhausted,true);
 });
 
-// Three real graph invocations include >100 steps, durable checkpoints and two
-// restarts of the same thread. Allow I/O contention with the renderer; this is
-// a correctness test, while production model/generation deadlines are tested
-// separately by the heartbeat fixtures.
-test('real Deep Agents loop exceeds old 100 steps, stops safely, and resets per turn',{timeout:120000},async()=>{
+test('real Deep Agents loop exceeds old 100 steps, stops safely, and resets per turn',{timeout:60000},async()=>{
  const parent=path.resolve(os.tmpdir()),dir=await fs.mkdtemp(path.join(parent,'3d-box-budget-'));
  const sessionId=crypto.randomUUID(),previous=process.env.AGENT_RECURSION_LIMIT;
  const requests=[];let ignoreStop=false;

@@ -1,6 +1,0 @@
-.director-progress{border:1px solid #ffffff20;border-radius:10px;padding:10px 12px;margin:8px 0;background:#ffffff06;font-size:12px;line-height:1.6}
-.director-progress summary{cursor:pointer;color:#e4e8eb;font-weight:600}
-.director-progress details{margin:8px 0}.director-progress p{margin:4px 0;color:#b5bbc2}
-.director-progress ol,.director-tasks{padding-left:18px;margin:8px 0}.director-tasks{list-style:none;padding:0}.director-tasks li{margin:8px 0}.director-tasks li>span{color:#9bb7cb}
-.director-tasks [data-status=blocked]>span,.director-criterion[data-verdict=fail]>strong{color:#f1a08f}.director-criterion[data-verdict=pass]>strong{color:#8ed5ac}
-.director-criterion{border-top:1px solid #ffffff12;padding-top:8px;margin-top:8px}.director-evidence{display:flex;gap:6px;overflow:auto}.director-evidence a{flex:0 0 112px;color:#adb9c5;font-size:10px;text-decoration:none}.director-evidence img{width:112px;max-height:72px;object-fit:contain;display:block;border-radius:4px}

@@ -2,7 +2,7 @@
 
 本项目使用 LangChain 官方 `deepagents` JavaScript SDK（锁文件当前为 1.15.0），由 `createDeepAgent` 创建真正的工具调用循环。模型通过 OpenAI 兼容接口接入。没有配置模型时返回明确错误，不使用模拟回复。
 
-libtv 可确认的部分：工具执行状态、渐进式场景交付、completed 产物描述、GLB/协作 JSON 下载、稳定实体 ID、相机/时间轴恢复。libtv 私有服务端工具 Schema 未公开。下列八个工具的参数是本项目定义，不声称逐字复刻原站私有接口。
+libtv 可确认的部分：工具执行状态、渐进式场景交付、completed 产物描述、GLB/协作 JSON 下载、稳定实体 ID、相机/时间轴恢复。libtv 私有服务端工具 Schema 未公开。下列七个工具的参数是本项目定义，不声称逐字复刻原站私有接口。
 
 ## 启动
 
@@ -31,7 +31,7 @@ libtv 可确认的部分：工具执行状态、渐进式场景交付、complete
   → IndexedDB 原子保存 GLB/JSON → 主视窗与时间轴更新
 ```
 
-生成程序不直接获得 Node、网络、DOM、shell、密钥或主机文件系统。QuickJS 有内存和执行时间限制。渲染器只加载本机服务中的运行代码和素材。Deep Agents 自带虚拟文件上下文/总结能力保留；暴露给模型的工具恰为 x_list、x_read、x_write、x_edit、x_grep、coding_todo_write、preview_3D_scene、build_3D_scene，没有通用 shell 或委派入口。前端复用现有工具执行状态展示，不增加按钮或入口。
+生成程序不直接获得 Node、网络、DOM、shell、密钥或主机文件系统。QuickJS 有内存和执行时间限制。渲染器只加载本机服务中的运行代码和素材。Deep Agents 自带虚拟文件上下文/总结能力保留；暴露给模型的工具恰为 x_list、x_read、x_write、x_edit、x_grep、preview_3D_scene、build_3D_scene，没有通用 shell 或委派入口。前端复用现有工具执行状态展示，不增加按钮或入口。
 
 模型请求会把本轮文本、实体上下文、文档正文、参考图及渲染检查图发送至配置的模型供应商。GLB、JSON、源程序、附件原文件、预览图、消息检查点和运行记录保存在本机 `.agent-data`；不接入 libtv、云存储或 LangSmith tracing。密钥仅由 Node 服务读取。
 
@@ -48,13 +48,11 @@ libtv 可确认的部分：工具执行状态、渐进式场景交付、complete
 
 所有工具先发 TOOL_CALL_START/ARGS，结束发 END/RESULT；错误返回 status:error 和 error 文本，供模型修复后重试。同一轮工具串行执行，避免并行写入与构建竞争。
 
-导演 skill 位于 `server/skills/studio-director/SKILL.md`，每轮自动加载。通过 `coding_todo_write` 提交通用计划、任务和审查，状态保存在只读 `/agent-state.json`。审查已执行可以同时判为 fail，失败证据不会因为后续任务更新失败而丢失。最终 accepted 要求当前交付版本的必需标准通过及各镜头采样完整。没有最低构建次数；成功一次即可通过，构建次数仅控制成本。
+为避免视觉检查无限打磨导致整轮超时，默认在达到 3 次成功构建且最新产物已有起点、中段与结尾检查帧后，以 `tool_choice:none` 结束工具调用。多机位按时间轴各镜头的有效时间范围判断，要求每个镜头至少有实际检查帧，不能要求首个机位覆盖整段影片，也不能用不在当前镜头时段内的其它机位图片替代。模型仍可在此之前自行结束。达到检查次数不代表画面或功能验收通过，最终说明需如实列出剩余问题。`AGENT_MAX_BUILD_PASSES` 可设置为 1–10；失败构建和旧版本检查帧不计入覆盖。
 
-源码先 `preview_3D_scene({target:"draft",frames:[{camera_id,time}]})` 检查，省去临时 GLB 导出/导入，不发布 RESULT、不覆盖主场景；修正后 build 导出，再 `target:"build"` 检查实际交付件。每批1–12帧共享场景加载；显式无效机位报错。源码始终作用于本轮上传的不可变基线，避免 patch 反复作用于自己的输出。结构检查与模型视觉判断分开，accepted 不是自动视觉质量保证。
+`AGENT_RECURSION_LIMIT` 默认 500，接受 50–5000 的整数，无效值回退到默认值。该值计算 LangGraph 执行步数，不是工具调用次数。接近上限时预留收尾步数：已有成功构建则关闭工具并要求如实总结尚未完成的修改与检查；没有成功构建则返回中文错误并保留原场景。步数按本轮首个模型节点计算，不累计历史会话的 checkpoint 步数。供应商忽略 `tool_choice:none` 时中止执行，避免继续循环。整轮超时限制仍由 `AGENT_RUN_TIMEOUT_MS` 控制。
 
-`AGENT_RECURSION_LIMIT` 默认 500，接受 50–5000 的整数，无效值回退到默认值。该值计算 LangGraph 执行步数，不是工具调用次数。接近上限时预留收尾步数：已有成功构建则关闭工具并要求如实总结尚未完成的修改与检查；没有成功构建则返回中文错误并保留原场景。步数按本轮首个模型节点计算，不累计历史会话的 checkpoint 步数。供应商忽略 `tool_choice:none` 时中止执行，避免继续循环。`AGENT_GENERATION_TIMEOUT_MS` 默认12分钟，覆盖模型等待与工具；`AGENT_MODEL_TIMEOUT_MS` 覆盖单次模型完整流式响应。`AGENT_RUN_TIMEOUT_MS` 是服务外层截止时间。
-
-文件工具只访问当前项目 workspace 下的 js/json/txt/md 文件。`/scene.js`、`/context.json` 等以 `/` 开头的路径是项目虚拟路径，不是磁盘绝对路径；拒绝 Windows 盘符、UNC 路径、`..` 越界与符号链接。`/context.json`、`/scene-api.txt`、`/agent-state.json` 与 `/skills/` 由服务更新，工具只能读取，不能写入或编辑。目录工具不会列出上传原文件、构建产物、检查点、环境变量或项目目录外的文件。
+文件工具只访问当前项目 workspace 下的 js/json/txt/md 文件。`/scene.js`、`/context.json` 等以 `/` 开头的路径是项目虚拟路径，不是磁盘绝对路径；拒绝 Windows 盘符、UNC 路径、`..` 越界与符号链接。`/context.json`、`/scene-api.txt` 由服务更新，工具只能读取，不能写入或编辑。目录工具不会列出上传原文件、构建产物、检查点、环境变量或项目目录外的文件。
 
 单个文本文件读取上限为 32 MiB。x_read、x_grep 的文本输出上限为 64000 字符；目录扫描最多检查 10000 项、深入 64 层。输出或扫描触限时返回 truncated，调用方应缩小目录、分段读取或缩小搜索范围，不应把部分结果当作完整文件或完整搜索。
 
@@ -239,31 +237,3 @@ SSE 每条为 `id: seq` 和 `data: JSON`：SESSION、RUN_STARTED、TEXT_MESSAGE_
 - https://docs.langchain.com/oss/javascript/deepagents/overview
 - https://docs.langchain.com/oss/javascript/deepagents/customization
 - https://docs.langchain.com/oss/javascript/deepagents/streaming
-
-
-## 导演工具与恢复
-
-`coding_todo_write` 的 op 是 `read / set_plan / update_tasks / record_reviews`。写操作需要唯一 requestId，可带 expectedRevision；相同请求重复提交不重复应用。具体 JSON Schema 由工具及 `server/scene-api.txt` 提供。工具公开 object 根节点，内部按 op 严格验证。
-
-- 计划包含 subjects、constraints、shots、criteria；不能在同一轮删除/降级必需标准或移除约束。新一轮保留 priorPlan 供编辑参考，不自动复用通过结论。
-- task kind 为 plan/implement/review/deliver；status 为 pending/in_progress/completed/blocked/cancelled。审查任务 completed 仅表示已检查，verdict 独立为 pass/fail/unverified。
-- 最终验收不能跳过任务清单：至少一项已完成 implement 任务有当前版本证据，且已完成 review 任务覆盖全部必需标准。当前真实帧可证明实现已执行；过期帧不能完成新任务，草稿帧不能证明最终交付合格。任务更新失败会给出具体任务、缺少的标准及恢复方法。
-- 新一轮可直接 `preview_3D_scene(target:"build")` 复核已有交付：服务核对当前源码哈希与不可变 GLB 哈希后，为新计划登记该构建，不再次导出，也不自动通过旧审查。若源码或当前基线证据已变化，会在渲染前拒绝旧交付。
-- draft/build/frame 证据由服务端产生 ID，绑定源码哈希、基线/素材身份、planRevision、产物及机位时间。模型不能创建证据或指定文件路径。
-- 每镜头起点、中点和出镜前一帧（最后镜头为终点）是交付采样要求；运动标准至少两个不同时间点。仅 build 证据可支持最终交付验收。
-- DIRECTOR_STATE、MODEL_STATUS 事件保存并重放；模型状态只显示耗时和阶段，不输出推理正文。RUN_FINISHED.outcome 区分 accepted/partial/not_generated，取消/错误保留状态。
-- 图像只在发起视觉请求前临时加载；checkpoint 保存引用。DiskSaver 按 namespace 保留最近4个及 delta 恢复必需的祖先、pending writes，避免恢复损坏。
-
-## 运行策略
-
-默认成功构建6次、构建失败3次、草稿48帧、交付36帧、工具100次、连续错误3次。预算耗尽时保留最后成功产物并明确部分完成，不把“预算用完”视为“验收通过”。
-
-模型能力按 exact model 配置。当前已验证的 DeepSeek V4.1 使用 modelKwargs.reasoning_effort；其他模型不自动附带扩展。可设置 AGENT_MODEL_PROFILE=fast/balanced/quality、AGENT_REASONING_EFFORT 和 AGENT_MODEL_CAPABILITIES；供应商实际支持能力需验证，不能从 OpenAI 兼容性推断。默认输出上限32768、自动重试0次；更长输出可显式调整。
-
-## 分阶段提交与回退
-
-基线：9155bdd。阶段一：fd28d46（源码预览）；阶段二：fa876c8（导演与todo）；阶段三：543cda2（当前版本交付验收）；运行恢复阶段见其后的 runtime 提交。
-
-各阶段独立提交。回退采用 git revert，按依赖从后往前撤销，不使用 reset --hard；保留 .agent-data 和 output 产物。新增状态文件对旧运行代码是旁路数据，不应删除生成项目以回退代码。服务重启后生效。
-
-验证：node --test --test-concurrency=2 tests/*.test.js；npm run build。测试不需要实际模型密钥，真实平台对比另行记录。

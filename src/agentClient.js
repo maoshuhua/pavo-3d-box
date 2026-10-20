@@ -57,18 +57,8 @@ export class AgentClient {
       if(event.seq){if(event.seq<=(this.state.eventSeq||0))return;this.state.eventSeq=event.seq;}
       if (event.type === 'SESSION') {this.state.sessionId = event.sessionId; this.save();}
       if(event.type==='RUN_STARTED'){this.state.runStatus='running';if(this.state.activeRun)this.state.activeRun.status='running';}
-      if(event.type==='MODEL_STATUS'){
-        const key=`${event.id}:model`;let item=this.state.messages.find(m=>m.id===key);
-        if(!item){item={id:key,role:'tool',toolName:'模型响应'};this.state.messages.push(item);}
-        Object.assign(item,{text:event.text,toolStatus:event.status,modelStatus:event});this.save();onEvent();
-      }
-      if(event.type==='DIRECTOR_STATE'){
-        const id=`${runId}:director`;let item=this.state.messages.find(m=>m.id===id);
-        if(!item){item={id,role:'assistant',text:''};this.state.messages.push(item);}
-        item.director=event.state;this.save();onEvent();
-      }
       if (event.type === 'RUN_ERROR') {failure = Error(event.message || 'Agent 生成失败。');this.state.runStatus='failed';if(this.state.activeRun)this.state.activeRun.status='failed';}
-      if (event.type === 'RUN_FINISHED') {finished = true;this.state.runStatus='completed';if(this.state.activeRun){this.state.activeRun.status='completed';if(event.outcome)this.state.activeRun.outcome=event.outcome;}}
+      if (event.type === 'RUN_FINISHED') {finished = true;this.state.runStatus='completed';if(this.state.activeRun)this.state.activeRun.status='completed';}
       if(event.type==='TOOL_CALL_START'){
         if(!this.state.messages.some(m=>m.id===event.toolCallId))this.state.messages.push({id:event.toolCallId,role:'tool',toolName:event.toolCallName,toolStatus:'running',text:`正在执行 ${event.toolCallName}`});
         this.save();onEvent();
