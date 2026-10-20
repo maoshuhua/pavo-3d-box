@@ -1,10 +1,10 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import {createDeepAgent,createFilesystemMiddleware} from 'deepagents';
+import {createDeepAgent,createFilesystemMiddleware,createSummarizationMiddleware,StateBackend} from 'deepagents';
 import {ChatOpenAI} from '@langchain/openai';
 import {createMiddleware} from 'langchain';
-import {HumanMessage} from '@langchain/core/messages';
+import {HumanMessage,SystemMessage} from '@langchain/core/messages';
 import {getConfig} from '@langchain/langgraph';
 import {DiskSaver} from './storage.js';
 import {createSceneTools} from './tools.js';
@@ -16,8 +16,9 @@ import {resolveAgentModel} from './agentModels.js';
 import {CodingTodo} from './codingTodo.js';
 import {directorSummary} from './directorSummary.js';
 import {atomicWrite} from './storage.js';
+import {conversationSummaryPrompt,localizeFrameworkMessage} from './agentPrompts.js';
 
-const instructions=`你是 3D-BOX 场景与运镜 Agent，用中文沟通。用户在一个已有三维编辑器中工作。
+const instructions=`你是 3D-BOX 场景与运镜智能体，用中文沟通。用户在一个已有三维编辑器中工作。计划、任务标题、分镜描述、验收观察、修正说明和交付总结均使用中文；工具名、字段名、枚举值、稳定 ID 和代码 API 保持原样。
 只使用八个工具：x_list、x_read、x_write、x_edit、x_grep、coding_todo_write、preview_3D_scene、build_3D_scene。
 使用 x_list 查看项目工作区、x_read 分页读取、x_grep 按字面量定位代码，再用 x_write/x_edit 编写或修改场景程序；build_3D_scene 生成实际 GLB/协作 JSON，preview_3D_scene 检查真实画面。
 这些是本项目实现的工具协议，不要声称拿到了 libtv 私有服务端源码。
@@ -59,6 +60,7 @@ async function executeDeepAgent(ctx,{model:injectedModel}={}){
  ctx.runId ||= crypto.randomUUID();
  ctx.director=await CodingTodo.open(ctx);
  const directorSkill=await fs.readFile(path.join(ROOT,'server','skills','studio-director','SKILL.md'),'utf8');
+ const systemPrompt=instructions+'\n\n已加载导演技能：\n'+directorSkill;
  const recursionLimit=agentRecursionLimit(),stepBudget=createStepBudget(recursionLimit);
  const streamedCalls=new Map();
  const checkpoint=await DiskSaver.open(path.join(ctx.dir,'sessions',ctx.sessionId,'checkpoint.bin'));
@@ -72,7 +74,8 @@ async function executeDeepAgent(ctx,{model:injectedModel}={}){
  // domain tools. Keep shell/delegation and generic host filesystem out of this app.
  const sceneToolsOnly=createMiddleware({name:'SceneToolsOnly',wrapModelCall:async(request,handler)=>{
   const messages=[];
-  for(const message of request.messages){
+  for(const original of request.messages){
+   const message=localizeFrameworkMessage(original);
    const refs=message.additional_kwargs?.sceneImageRefs;
    if(!refs){messages.push(message);continue;}
    const content=typeof message.content==='string'?[{type:'text',text:message.content}]:[...message.content];
@@ -108,12 +111,13 @@ async function executeDeepAgent(ctx,{model:injectedModel}={}){
    messages.push(new HumanMessage({content:stepLimitMessage(ctx,recursionLimit)+'现在仅用中文总结实际成功产物，并明确列出未完成内容和未检查的机位、时间点；不得声称全部完成。'}));
   }
   if(completed)messages.push(new HumanMessage({content:`当前交付件 ${completed.taskId} 的必需验收标准已提交当前版本证据。现在结束工具调用，简短总结实际结果；模型视觉判断不等同于自动质量认证。`}));
-  const response=await handler({...request,messages,tools:request.tools.filter(t=>allowed.has(t.name)),...(ctx.finalizing?{toolChoice:'none'}:{})});
+  // 最终发送层使用项目中文指令，避免模型配置附加英文的通用工具提示。
+  const response=await handler({...request,systemMessage:new SystemMessage({content:systemPrompt}),messages,tools:request.tools.filter(t=>allowed.has(t.name)),...(ctx.finalizing?{toolChoice:'none'}:{})});
   if(ctx.finalizing&&response.tool_calls?.length)throw Error('模型在收尾时仍请求调用工具，已停止本轮执行。最近成功产物已保留；未完成的修改和检查不能视为通过。');
   return response;
  }});
- const agent=await createDeepAgent({model,tools,checkpointer:checkpoint,systemPrompt:instructions+'\n\n已加载导演 skill：\n'+directorSkill,
-  middleware:[createFilesystemMiddleware({tools:['read_file','ls']}),sceneToolsOnly]});
+ const agent=await createDeepAgent({model,tools,checkpointer:checkpoint,systemPrompt,
+  middleware:[createFilesystemMiddleware({tools:['read_file','ls']}),createSummarizationMiddleware({backend:runtime=>new StateBackend(runtime),summaryPrompt:conversationSummaryPrompt}),sceneToolsOnly]});
  const api=await fs.readFile(path.join(ROOT,'server','scene-api.txt'),'utf8');
  const context={scene:ctx.sceneJson,reference:ctx.reference,generationSettings:ctx.generationSettings,attachments:ctx.assets.map(({id,name,kind,text})=>({id,name,kind,...text?{text}:{}}))};
  await ctx.writeContext(context,api);

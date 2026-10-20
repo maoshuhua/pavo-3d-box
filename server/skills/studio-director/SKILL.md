@@ -1,122 +1,47 @@
-# Studio director
+# 三维预演导演
 
-Direct a scene from the user's intent to an editable, inspected delivery. Apply
-this method to any subject, location, style, duration or number of shots. This
-skill supplies a process, never a fixed character, action or scene template.
+把用户意图转化为可编辑、经过检查的三维预演。此方法适用于任意主体、场景、风格、时长和镜头数量，只规定工作流程，不提供固定角色、动作或场景模板。计划、任务标题、观察记录、修正说明和交付总结均使用中文；工具名、字段名、枚举值、稳定 ID 和代码 API 保留原样。
 
-## Plan only what the task needs
+## 按任务需要制定计划
 
-Read the available scene API and existing project context. Preserve unrelated
-work when editing an existing scene. Convert explicit requirements into required
-acceptance criteria; optional decoration must not block delivery. For a small
-edit use a compact plan describing the affected shot and result.
+读取场景 API 和项目上下文。修改已有场景时保留无关内容。把用户明确要求写为必需验收标准，可选装饰不能阻止交付。小范围修改使用紧凑计划，只说明受影响镜头和预期结果。
 
-Use `coding_todo_write` with `op: "set_plan"` to persist intent, duration,
-aspectRatio, generic subjects and constraints, ordered contiguous shots, and
-structural / visual / motion criteria. Each shot records its narrative purpose,
-action, framing and camera movement. Its cameraRef must be the actual stable
-camera ID used in the scene. State units, coordinate directions, subject
-orientation, paths and contact relationships where they matter. Do not prescribe
-every implementation detail before seeing a frame.
+使用一次 `coding_todo_write({op:"set_plan",plan,tasks})` 同时保存计划与结果型任务。计划包含 intent、duration、aspectRatio、通用主体与约束、按时间连续排列的分镜，以及 structural / visual / motion 验收标准。每个分镜记录叙事目的、动作、景别和运镜。cameraRef 必须是实际场景中稳定的相机 ID。需要时明确单位、坐标方向、主体朝向、路径和接触关系，不要在看到画面前规定所有实现细节。
 
-Include result-oriented `tasks` in the same `op: "set_plan"` call. Use dependencies when
-one result actually requires another. Keep task IDs stable. Every mutation needs
-a unique requestId; use the returned state revision as expectedRevision when
-available. Successful tool responses already include state and current evidence;
-do not add routine read-back calls. Read `coding_todo_write({op:"read"})` or `/agent-state.json` after a
-conflict or recovery. This file is server-owned and read-only. A previous run's
-plan is context, not accepted work for this request.
-If a task update fails, read the saved state and repair that update. Do not
-continue with an empty task list. Final delivery needs completed implementation
-work with current evidence and completed review tasks covering every required
-criterion. Rendered frame IDs can prove implementation work; they do not by
-themselves turn a review into a pass.
+只有真实存在前后依赖的任务才设置 dependsOn。保持任务 ID 稳定。每次变更使用唯一 requestId；可用返回的 revision 作为 expectedRevision。成功响应已经包含当前状态和可用证据，不要例行追加读取。冲突、失败恢复或进度不明时再读取 `coding_todo_write({op:"read"})` 或只读的 `/agent-state.json`。上一轮计划仅供参考，不代表本轮工作已通过验收。
 
-## Make the action and image work
+任务更新失败时读取已保存状态并修正，不要带着空任务列表继续。最终交付需要已完成、带当前证据的实现任务，以及覆盖所有必需标准的已完成审查任务。真实渲染帧可以证明实现工作已执行，但不会自动使审查结论变成通过。
 
-Work from spatial arrangement and key actions to composition and lighting, then
-optional detail. Decide what each shot must reveal before choosing its camera.
-Generate source through the documented scene API without imports or hidden
-helpers. Do not assume a reusable actor or motion library exists.
+## 先展示初版，再检查画面和动作
 
-As soon as the complete source is ready, call `build_3D_scene` to display a
-playable first version. Do not delay this result for source screenshot reviews.
-Then inspect `preview_3D_scene({target:"build"})`. Without explicit frames this
-captures only missing minimum coverage, up to 12 frames at once. Use returned
-`missing_frames` to decide whether another batch is needed; no state read is
-required. Static shots start with one representative image; shots with required
-motion criteria need at least two times. These are minimum coverage, not proof
-that every action is correct. Add exact before/during/after action beats when
-needed. A `target:"draft"` preview is an optional debugging escape hatch, never
-a prerequisite for the first build or a substitute for GLB acceptance.
+先解决空间布局和关键动作，再处理构图、灯光与可选细节。选择机位前先明确该镜头必须表现什么。通过文档规定的场景 API 编写源码，不使用导入或隐藏辅助接口，也不假设已有可复用角色或动作库。
 
-Inspect actual pixels; tool success only proves rendering succeeded.
-Look for visibility, framing, light, occlusion, scale and readable contact. A
-hand interaction needs the hand, object and other subject to meet in world space
-and remain visible in the relevant shot. Check action before, during and after
-the important beat; one still frame cannot establish motion.
-For numeric spatial requirements, verify coordinates and transformed positions
-from the implementation as well as the image. Perspective alone cannot prove
-an exact distance. Define each subject's local forward axis, check its world
-direction against the intended target, and check attached objects after parent
-transforms and animation. Seeing a face in the camera does not prove two
-subjects face each other. Record ambiguous or unmeasured results as unverified.
+完整源码就绪后立即调用 `build_3D_scene`，让用户看到可播放初版，不要为源码截图审查推迟首次展示。随后使用 `preview_3D_scene({target:"build"})` 检查实际 GLB。不显式指定 frames 时，只补当前版本缺失的最小覆盖帧，每批最多 12 帧。根据返回的 missing_frames 判断是否需要下一批，无需额外读取状态。
 
-Examine continuity, facing direction, contact and silhouette. Reuse current
-evidence; requesting the same build/camera/time returns the saved image and ID
-without rendering. Batch observations and fix their concrete causes together,
-then rebuild once. Request additional close action samples only for affected
-shots and dependencies. Every new export still needs its own minimum coverage;
-old-source or old-build images cannot certify it. Do not repeatedly sample the
-whole timeline at extra times or rebuild unchanged source.
-When animation writes a camera or subject transform, its sampled track overrides
-the static declaration. Trace every writer before changing composition or pose;
-changing only the static camera cannot fix a baked trajectory. Prefer one
-authored trajectory function shared by initial placement and sampled frames, so
-the two cannot drift. Inspect exported frames rather than trusting comments.
+静态镜头先看一个代表时刻；包含必需运动标准的镜头至少检查两个时刻。这只是最小覆盖，不代表动作一定正确。需要时追加关键动作之前、过程中和之后的精确采样。`target:"draft"` 仅作为显式源码调试入口，不能成为首次构建前置步骤，也不能替代 GLB 验收。
 
-## Keep observations separate from completion
+必须检查真实像素；工具成功仅说明渲染完成。检查可见性、构图、光照、遮挡、比例和接触关系。手部交互要求手、物品和另一主体在世界坐标中实际接近，并在相关镜头中清楚可见。一张静帧不能证明运动，应检查关键节拍前后的变化。
 
-Record each inspection using `op: "record_reviews"`, with the server-issued
-evidence IDs and an observation of what is actually visible. Include `tasks`
-in that same call to complete implementation/inspection tasks, open corrective
-work, or close delivery once acceptance is satisfied. Reviews validate before
-task updates and the whole request commits atomically. If any entry fails,
-neither reviews nor task updates were saved; repair the batch before retrying.
-A review verdict
-is pass, fail or unverified. A review task can be completed when its inspection
-found a failure; record the failure and create or reopen corrective work together.
-Never mark a failed criterion pass merely to close its task.
+有精确空间要求时，同时检查实现中的坐标与变换后位置，不能仅凭透视图证明距离。明确主体局部前向轴，检查世界朝向是否指向目标，并检查父级变换和动画影响后的附着物位置。相机能看到脸不代表两个人互相面对；无法测量或含糊的结果记为 unverified。
 
-Structural requirements use build checks; visual requirements need actual frames
-for their shots; motion requirements need different times for each relevant
-shot. Do not invent evidence IDs or treat missing images as evidence. New source,
-plan or delivery versions can invalidate old acceptance. Historical evidence
-remains useful for diagnosis but cannot certify a different version.
-After any source edit, use fresh frames for every criterion you pass, including
-unchanged cameras. A motion review needs at least two distinct current times
-inside each relevant shot, using that shot's camera. If a review batch is
-rejected, none of that batch was saved. Read the error's missing camera/time
-coverage, render the missing samples, and retry with their returned IDs; do not
-retry the same insufficient evidence. Keep numeric implementation details in a
-plan consistent with the corrected source, or phrase criteria as intended
-behavior rather than baking a particular angle or direction into them.
+检查镜头连续性、朝向、接触和轮廓。复用当前证据；重复请求同一构建、机位和时间会返回原图与原证据 ID，不重新渲染。把本轮观察到的明确问题集中修正后再构建一次。只为受影响镜头和关联动作追加细节采样。每个新导出仍须补齐自己的最小覆盖，旧源码或旧构建图像不能证明新版本通过。不要反复对整条时间线追加无必要采样，也不要构建未变化的源码。
 
-## Inspect and deliver the exported result
+动画轨道会覆盖相机或主体的静态变换。修改构图和姿势前追踪所有变换写入来源，不能仅修改静态声明来修复已烘焙轨迹。优先让初始放置和动画采样共用同一个轨迹函数，避免二者偏离。以实际导出画面为准，不把代码注释当作证据。
 
-The first build is displayed while inspection continues; display is not
-acceptance. The last successful build stays available if later work fails.
-Use target `build` to inspect the actual
-immutable GLB, not merely its source preview. Confirm duration, aspect ratio,
-camera cuts, animation and critical visual requirements survived export.
+## 区分已执行审查与验收通过
 
-Record final reviews against current build evidence. One correct build is
-sufficient; build count is a cost statistic, not a quality gate. End when all
-required criteria have passed with current delivery evidence. Optional polish
-must not create an endless review loop. Default to the first build and at most
-two concentrated correction builds, subject to the runtime's returned limits.
-Stop with explicit partial status and remaining failures when that budget is
-exhausted; never weaken criteria to force acceptance. A normal execution can still produce a
-partial result. On a budget, error or cancellation, retain the successful
-artifact, failed observations and outstanding issues. Report what succeeded,
-what did not, and the actual delivery status without claiming unseen quality.
+使用 `op:"record_reviews"`，记录服务端发放的证据 ID 和画面中实际可见的中文观察。同次调用可带 tasks，完成实现或审查任务、创建修正工作，或在验收满足后结束交付。先校验审查，再校验任务，整批原子提交；任何条目失败，都不会保存本批审查和任务更新，必须修正后重试。
+
+verdict 使用 pass、fail 或 unverified。审查任务可以已经执行完成，同时发现画面失败；把失败观察和新增或重新打开的修正任务一起提交。不能为了关闭任务把失败标准改成通过。
+
+结构标准使用构建检查；视觉标准使用相关镜头的实际帧；运动标准需要相关镜头内不同时间的实际帧。不能编造证据 ID，不能把缺图当证据。源码、计划或交付版本变化会使旧验收失效。历史证据可用于诊断，不能认证其他版本。
+
+源码编辑后，每个通过结论都必须使用当前版本帧，包括机位未变的镜头。运动审查至少关联相关镜头内该机位两个不同时间的当前帧。批量审查被拒绝时，整批均未保存；根据错误中缺失的机位和时间覆盖补采样，再用返回的 ID 重试，不能重复提交同一批不足证据。计划中的数值与实现保持一致，或把标准写为预期行为，避免把某个实现角度或方向误当作用户要求。
+
+## 验收实际导出并结束交付
+
+初版展示时可以继续检查，展示不等于通过验收。后续失败时保留最近成功构建。使用 `target:"build"` 检查实际不可变 GLB，确认时长、画幅、切镜、动画和关键视觉要求都保留在导出中。
+
+最终审查必须关联当前构建证据。一个正确构建即可交付；构建次数只控制成本，不是质量门槛。所有必需标准由当前交付证据支持并通过后立即结束，不让可选润色形成无尽循环。默认首次构建后最多两轮集中修正，以运行时返回的预算为准。预算耗尽时明确返回部分完成和剩余失败项，不能削弱标准来强行通过。
+
+正常执行也可能只得到部分结果。预算、错误或取消时，保留成功产物、失败观察和待办问题，准确说明已完成、未完成和实际交付状态，不宣称未查看的质量已得到验证。

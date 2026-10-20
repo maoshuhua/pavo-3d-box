@@ -106,6 +106,10 @@ test('Deep Agents displays first build before inspection, batches correction and
   assert(modelRequests.every(r=>JSON.stringify(r.tools.map(t=>t.function.name).sort())===JSON.stringify(expectedTools)),'every model request must expose exactly eight supported tools');
   const skillMessages=modelRequests[0].messages.filter(m=>m.role==='system').map(m=>typeof m.content==='string'?m.content:JSON.stringify(m.content)).join('\n');
   assert.match(skillMessages,/coding_todo_write/,'director tool contract must be present in the model context');
+  for(const request of modelRequests){
+   for(const message of request.messages.filter(m=>m.role==='system'))assert.doesNotMatch(typeof message.content==='string'?message.content:JSON.stringify(message.content),/\b[A-Za-z]+(?: +[A-Za-z]+){4,}\b/,'actual system instructions must not contain English prose');
+   for(const tool of request.tools)assert.match(tool.function.description,/[\u4e00-\u9fff]/,'actual gateway tool descriptions must be Chinese');
+  }
   const checkpoint=await fs.readFile(path.join(projectDir(projectId),'sessions',events.find(e=>e.type==='SESSION').sessionId,'checkpoint.bin'));
   assert(!checkpoint.includes(Buffer.from('data:image/png;base64,')),'preview pixel payloads must not be retained in checkpoints');
   for(const name of ['x_list','x_read','x_grep']){
