@@ -55,6 +55,11 @@ Sample representative shot frames, action beats, both sides of a cut and the
 ending. Examine continuity, facing direction, contact and silhouette. Fix the
 specific cause, then inspect the affected shot and any dependent action. Do not
 repeat the full context or rebuild a GLB for every source adjustment.
+When animation writes a camera or subject transform, its sampled track overrides
+the static declaration. Trace every writer before changing composition or pose;
+changing only the static camera cannot fix a baked trajectory. Prefer one
+authored trajectory function shared by initial placement and sampled frames, so
+the two cannot drift. Inspect exported frames rather than trusting comments.
 
 ## Keep observations separate from completion
 

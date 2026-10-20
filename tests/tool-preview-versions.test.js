@@ -108,3 +108,31 @@ test('patch draft and build always evaluate against the frozen run input',{timeo
  assert.equal(ctx.sceneJson.entities.find(e=>e.id==='subject').state.transform.position[0],0,'the run input is unchanged');
  assert.equal(ctx.director.state.currentSource.baselineRevision,built.baseline_revision);
 });
+
+test('a fresh review run can inspect an unchanged immutable build without exporting again',{timeout:90000},async t=>{
+ const {ctx,invoke,events}=await fixture(t);
+ await invoke('x_write',{path:'/scene.js',content:sourceFor(spec())});
+ const built=await invoke('build_3D_scene',{});assert.equal(built.status,'completed',built.error);
+ ctx.runId=crypto.randomUUID();ctx.director=await CodingTodo.open(ctx);
+ const tools=new Map(createSceneTools(ctx).map(tool=>[tool.name,tool]));
+ const call=async(name,args)=>decode(await tools.get(name).invoke(args));
+ await call('coding_todo_write',{op:'set_plan',requestId:'resume-plan',plan});
+ const preview=await call('preview_3D_scene',{target:'build',frames:built.required_frames});
+ assert.equal(preview.status,'completed',preview.error);assert(preview.source_evidence_id);
+ assert.equal(ctx.director.state.currentBuild.taskId,built.task_id);
+ assert.equal(ctx.director.state.currentBuild.sourceHash,built.source_hash);
+ assert(preview.frames.every(frame=>frame.evidence_id));
+ assert.equal(events.filter(event=>event.type==='RESULT').length,1,'reviewing an existing build must not export or publish another result');
+ assert.equal(ctx.director.ready().ready,false,'a prior delivery is not automatically accepted for a new request');
+ await call('coding_todo_write',{op:'record_reviews',requestId:'resume-review',reviews:[{criterionId:'structure',verdict:'pass',evidenceIds:[preview.source_evidence_id],observation:'The unchanged exported build has the requested structure.'}]});
+ await call('coding_todo_write',{op:'update_tasks',requestId:'resume-tasks',tasks:[
+  {id:'implementation',kind:'implement',title:'Confirm current implementation',status:'completed',evidenceIds:[preview.source_evidence_id]},
+  {id:'inspection',kind:'review',title:'Inspect the current delivery',status:'completed',criterionIds:['structure']},
+ ]});
+ assert.equal(ctx.director.ready().ready,true);
+ await call('x_edit',{path:'/scene.js',old_string:'#dd3311',new_string:'#0066ff'});
+ const before=events.filter(event=>event.type==='PREVIEW').length;
+ const stale=await call('preview_3D_scene',{target:'build',time:1});
+ assert.equal(stale.status,'error');assert.match(stale.error,/earlier source/);
+ assert.equal(events.filter(event=>event.type==='PREVIEW').length,before,'stale delivery is rejected before rendering or publishing frames');
+});

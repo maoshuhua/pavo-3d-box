@@ -97,6 +97,16 @@ export function createSceneTools(ctx){
     if(!current)throw Error('No exported build exists. Use target:"draft" to preview source before building.');
     sourceHash=current.result.source_sha256;baselineRevision=current.result.baseline_revision;taskId=current.result.task_id;
     const bytes=await fs.readFile(path.join(dir,'artifacts',taskId,'model.glb'));
+    if(ctx.director){
+     const authored=await fs.readFile((await workspaceTarget(dir,current.result.source||virtualPath)).file,'utf8');
+     if(sha256(authored)!==sourceHash)throw Error('The exported GLB belongs to an earlier source. Build the current source before reviewing this delivery.');
+     if(sha256(bytes)!==current.result.glb_sha256)throw Error('Exported GLB hash does not match its immutable build record. Rebuild before reviewing this delivery.');
+     const state=ctx.director.snapshot();
+     if(state.currentSource&&(state.currentSource.sourceHash!==sourceHash||state.currentSource.baselineRevision!==baselineRevision))throw Error('The exported GLB does not match the current source/baseline evidence. Build the current source before reviewing this delivery.');
+     if(state.currentBuild?.taskId!==taskId||state.currentBuild.planRevision!==state.planRevision){
+      sourceEvidence=await ctx.director.registerBuild({taskId,sourceHash,baselineRevision,json:current.json,artifactHash:current.result.glb_sha256});
+     }else sourceEvidence=state.evidence.find(record=>record.id===state.currentBuild.evidenceId);
+    }
     rendered=await renderCall('previewBatch',{glb:bytes.toString('base64'),json:current.json,frames:requests.map(f=>({cameraId:f.camera_id,time:f.time}))},signal);
    }
    ctx.executionBudget?.consume(selected==='draft'?'draftFrames':'deliveryFrames',requests.length);

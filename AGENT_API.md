@@ -248,6 +248,7 @@ SSE 每条为 `id: seq` 和 `data: JSON`：SESSION、RUN_STARTED、TEXT_MESSAGE_
 - 计划包含 subjects、constraints、shots、criteria；不能在同一轮删除/降级必需标准或移除约束。新一轮保留 priorPlan 供编辑参考，不自动复用通过结论。
 - task kind 为 plan/implement/review/deliver；status 为 pending/in_progress/completed/blocked/cancelled。审查任务 completed 仅表示已检查，verdict 独立为 pass/fail/unverified。
 - 最终验收不能跳过任务清单：至少一项已完成 implement 任务有当前版本证据，且已完成 review 任务覆盖全部必需标准。当前真实帧可证明实现已执行；过期帧不能完成新任务，草稿帧不能证明最终交付合格。任务更新失败会给出具体任务、缺少的标准及恢复方法。
+- 新一轮可直接 `preview_3D_scene(target:"build")` 复核已有交付：服务核对当前源码哈希与不可变 GLB 哈希后，为新计划登记该构建，不再次导出，也不自动通过旧审查。若源码或当前基线证据已变化，会在渲染前拒绝旧交付。
 - draft/build/frame 证据由服务端产生 ID，绑定源码哈希、基线/素材身份、planRevision、产物及机位时间。模型不能创建证据或指定文件路径。
 - 每镜头起点、中点和出镜前一帧（最后镜头为终点）是交付采样要求；运动标准至少两个不同时间点。仅 build 证据可支持最终交付验收。
 - DIRECTOR_STATE、MODEL_STATUS 事件保存并重放；模型状态只显示耗时和阶段，不输出推理正文。RUN_FINISHED.outcome 区分 accepted/partial/not_generated，取消/错误保留状态。
