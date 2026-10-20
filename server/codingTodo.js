@@ -17,9 +17,9 @@ const taskSchema=z.object({id,title:text,kind:z.enum(['plan','implement','review
 const reviewSchema=z.object({criterionId:id,verdict:z.enum(['pass','fail','unverified']),evidenceIds:refs,observation:text}).strict();
 export const codingTodoSchema=z.discriminatedUnion('op',[
  z.object({op:z.literal('read')}).strict(),
- z.object({op:z.literal('set_plan'),...mutation,plan:directorPlanSchema}).strict(),
+ z.object({op:z.literal('set_plan'),...mutation,plan:directorPlanSchema,tasks:z.array(taskSchema).min(1).max(200).optional()}).strict(),
  z.object({op:z.literal('update_tasks'),...mutation,tasks:z.array(taskSchema).min(1).max(200)}).strict(),
- z.object({op:z.literal('record_reviews'),...mutation,reviews:z.array(reviewSchema).min(1).max(200)}).strict(),
+ z.object({op:z.literal('record_reviews'),...mutation,reviews:z.array(reviewSchema).min(1).max(200),tasks:z.array(taskSchema).min(1).max(200).optional()}).strict(),
 ]);
 // Compatible chat gateways require an object at the function schema root.
 // Keep operation-specific validation above in apply(), after tool invocation.
@@ -47,14 +47,16 @@ function validatePlan(plan){
  for(const constraint of plan.constraints)for(const subject of constraint.subjectIds)if(!subjects.has(subject))throw Error(`Unknown subject ${subject}`);
 }
 
-// Samples are derived from the actual plan rather than a fixed shot template.
-// Inspect the outgoing camera just before each cut and the incoming camera at
-// the cut. Short shots receive proportionally spaced samples.
+// Minimum coverage follows each shot's required criteria. Moving shots need
+// both ends (including the two sides of cuts); other shots start with one
+// representative image. Action-specific beats may require additional samples.
 export function requiredFrames(plan){
  if(!plan)return [];
  const frames=plan.shots.flatMap((shot,index)=>{
   const epsilon=Math.min(1/30,(shot.end-shot.start)/4);
-  return [shot.start,(shot.start+shot.end)/2,index===plan.shots.length-1?shot.end:shot.end-epsilon].map(time=>({camera_id:shot.cameraRef,time:Math.round(time*1e6)/1e6,shotId:shot.id}));
+  const motion=plan.criteria.some(c=>c.required&&c.kind==='motion'&&(!c.shotIds.length||c.shotIds.includes(shot.id)));
+  const times=motion?[shot.start,index===plan.shots.length-1?shot.end:shot.end-epsilon]:[(shot.start+shot.end)/2];
+  return times.map(time=>({camera_id:shot.cameraRef,time:Math.round(time*1e6)/1e6,shotId:shot.id}));
  });
  return frames.filter((frame,index)=>frames.findIndex(other=>other.camera_id===frame.camera_id&&other.time===frame.time)===index);
 }
@@ -104,7 +106,11 @@ export class CodingTodo {
   const state={version:1,runId:ctx.runId,revision:0,planRevision:0,plan:null,priorPlan:previous?.plan??null,tasks:[],reviews:[],reviewHistory:[],evidence:[],currentSource:null,currentDraft:null,currentBuild:null,outcome:'in_progress',reason:null,requests:[],updatedAt:now()};
   const instance=new CodingTodo(ctx,state);await instance._save(state);return instance;
  }
- snapshot(){return {...clone(this.state),requiredFrames:requiredFrames(this.state.plan),acceptance:this.ready()};}
+ snapshot(){return {...clone(this.state),requiredFrames:requiredFrames(this.state.plan),missingFrames:this.missingFrames(),acceptance:this.ready()};}
+ missingFrames(state=this.state){
+  const frames=state.evidence.filter(e=>e.kind==='frame'&&this._validEvidence(state,e,true));
+  return requiredFrames(state.plan).filter(sample=>!frames.some(frame=>frame.cameraId===sample.camera_id&&Math.abs(frame.time-sample.time)<=1/30+.000001));
+ }
  read(){return this.snapshot();}
  _serial(fn){const next=this.queue.catch(()=>{}).then(fn);this.queue=next;return next;}
  async _save(state){await atomicWrite(this.file,JSON.stringify(state,null,2));this.state=state;this.ctx.emit?.({type:'DIRECTOR_STATE',state:this.snapshot()});}
@@ -130,11 +136,14 @@ export class CodingTodo {
      state.reviews=state.reviews.filter(r=>r.criterionId!==review.criterionId);
      state.reviews.push({...review,planRevision:state.planRevision,reviewedAt:now()});
     }
-   }else{
-    unique(args.tasks.map(t=>t.id),'task IDs');
-    for(const task of args.tasks){state.tasks=state.tasks.filter(t=>t.id!==task.id);state.tasks.push(task);}
-    this._checkTasks(state,new Set(args.tasks.map(t=>t.id)));
    }
+  }
+  // Reviews are validated before task completion, but both commit together.
+  // A rejected task leaves the plan, observations and revision untouched.
+  if(args.tasks){
+   unique(args.tasks.map(t=>t.id),'task IDs');
+   for(const task of args.tasks){state.tasks=state.tasks.filter(t=>t.id!==task.id);state.tasks.push(task);}
+   this._checkTasks(state,new Set(args.tasks.map(t=>t.id)));
   }
   state.requests.push({id:args.requestId,fingerprint});state.requests=state.requests.slice(-256);
   return this._commit(state);
@@ -238,8 +247,7 @@ export class CodingTodo {
   const inspected=new Set(state.tasks.filter(task=>task.kind==='review'&&task.status==='completed').flatMap(task=>task.criterionIds));
   for(const criterion of state.plan.criteria.filter(c=>c.required))if(!inspected.has(criterion.id))reasons.push(`No completed review task for required criterion: ${criterion.id}; record its review, then complete a review task covering it`);
   for(const task of state.tasks)if(task.kind!=='deliver'&&!['completed','cancelled'].includes(task.status))reasons.push(`Unfinished task: ${task.id}`);
-  const frames=state.evidence.filter(e=>e.kind==='frame'&&this._validEvidence(state,e,true));
-  for(const sample of requiredFrames(state.plan))if(!frames.some(frame=>frame.cameraId===sample.camera_id&&Math.abs(frame.time-sample.time)<=1/30+.000001))reasons.push(`Missing final frame: ${sample.camera_id}@${sample.time}`);
+  for(const sample of this.missingFrames(state))reasons.push(`Missing final frame: ${sample.camera_id}@${sample.time}`);
   return {ready:reasons.length===0,reasons,taskId:state.currentBuild?.taskId??null,planRevision:state.planRevision};
  }
  ready(){return this._ready(this.state);}

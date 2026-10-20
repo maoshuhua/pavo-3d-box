@@ -140,7 +140,45 @@ test('explicit generation settings constrain the plan and auto duration remains 
 
 test('sampling includes both sides of cuts and final shot coverage',()=>{
  const p=plan();p.shots=[{...p.shots[0],end:1},{...p.shots[0],id:'second',start:1,cameraRef:'insert'}];
+ p.criteria.forEach(criterion=>criterion.shotIds=['shot','second']);
  const samples=requiredFrames(p);assert.ok(samples.some(s=>s.camera_id==='camera'&&Math.abs(s.time-(1-1/30))<1e-6));assert.ok(samples.some(s=>s.camera_id==='insert'&&s.time===1));assert.ok(samples.some(s=>s.camera_id==='insert'&&s.time===2));
+});
+
+test('sampling scales with required motion and missing coverage stays version-bound',async t=>{
+ const p=plan();p.shots=[{...p.shots[0],end:1},{...p.shots[0],id:'static',start:1,cameraRef:'detail'}];
+ p.criteria[1].shotIds=['shot','static'];
+ assert.deepEqual(requiredFrames(p).map(f=>[f.camera_id,f.time]),[['camera',0],['camera',.966667],['detail',1.5]]);
+ const {todo}=await setup(t),e=await evidence(todo,{times:[0]});
+ assert.deepEqual(todo.snapshot().missingFrames.map(f=>f.time),[2]);
+ await todo.registerFrames({...e.key,target:'build',frames:[{camera_id:'camera',time:2}]});
+ assert.deepEqual(todo.snapshot().missingFrames,[]);
+ await todo.noteSource({sourceHash:'changed',baselineRevision:'base-1'});
+ assert.deepEqual(todo.snapshot().missingFrames.map(f=>f.time),[0,2]);
+});
+
+test('plan and tasks commit once, with rollback and idempotent retry',async t=>{
+ const {todo}=await setup(t),before=todo.snapshot();
+ await assert.rejects(todo.apply({op:'set_plan',requestId:'invalid-batch',plan:plan(),tasks:[{id:'new',title:'New work',kind:'implement',status:'pending',dependsOn:['missing']}]}),/Unknown dependency/);
+ assert.deepEqual(todo.snapshot(),before);
+ const args={op:'set_plan',requestId:'combined-plan',expectedRevision:before.revision,plan:plan(),tasks:[{id:'new',title:'Implement result',kind:'implement',status:'pending'}]};
+ const after=await todo.apply(args);
+ assert.equal(after.revision,before.revision+1);assert.equal(after.tasks[0].id,'new');
+ assert.equal((await todo.apply(args)).revision,after.revision);
+});
+
+test('reviews and completion commit atomically, including failure with corrective work',async t=>{
+ const {todo}=await setup(t),e=await evidence(todo),before=todo.snapshot();
+ const reviews=[{criterionId:'visible',verdict:'fail',evidenceIds:[e.frames[1].id],observation:'The subject is occluded.'}];
+ await assert.rejects(todo.apply({op:'record_reviews',requestId:'bad-review-batch',reviews,tasks:[{id:'inspect',title:'Inspect',kind:'review',status:'completed',criterionIds:['motion']}]}),/missing recorded observations/);
+ assert.deepEqual(todo.snapshot(),before);
+ const args={op:'record_reviews',requestId:'failure-and-fix',reviews,tasks:[
+  {id:'inspect',title:'Inspect visibility',kind:'review',status:'completed',criterionIds:['visible']},
+  {id:'fix',title:'Remove occlusion',kind:'implement',status:'pending',dependsOn:['inspect']},
+ ]};
+ const state=await todo.apply(args);
+ assert.equal(state.revision,before.revision+1);assert.equal(state.reviews[0].verdict,'fail');
+ assert.equal(state.tasks[0].status,'completed');assert.equal(state.tasks[1].status,'pending');assert.equal(state.acceptance.ready,false);
+ assert.equal((await todo.apply(args)).revision,state.revision);
 });
 
 test('source corrections do not prevent adding work after an earlier implementation completed',async t=>{

@@ -20,7 +20,7 @@ test('budget categories are independent, bounded, and measure the current invoca
  assert.equal(budget.check('tools').allowed,false);assert.equal(budget.status().used.tools,2);
  budget.consume('consecutiveErrors');budget.resetErrors();assert.equal(budget.status().used.consecutiveErrors,0);
  time=1100;assert.equal(budget.check('builds').reason,'totalMs');assert.equal(budget.status().remainingMs,0);
- assert.equal(executionLimits({AGENT_MAX_BUILD_PASSES:'garbage'}).builds,6);
+ assert.equal(executionLimits({AGENT_MAX_BUILD_PASSES:'garbage'}).builds,3);
  assert.throws(()=>budget.consume('unknown'),/Unknown/);
 });
 

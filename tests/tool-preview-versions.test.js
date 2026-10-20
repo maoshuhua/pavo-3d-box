@@ -11,6 +11,7 @@ import {projectDir,sha256} from '../server/storage.js';
 import {CodingTodo} from '../server/codingTodo.js';
 import {createSceneTools} from '../server/tools.js';
 import {renderCall,closeRenderer} from '../server/renderService.js';
+import {createExecutionBudget} from '../server/agentBudget.js';
 
 let renderHost;
 before(async()=>{
@@ -135,4 +136,63 @@ test('a fresh review run can inspect an unchanged immutable build without export
  const stale=await call('preview_3D_scene',{target:'build',time:1});
  assert.equal(stale.status,'error');assert.match(stale.error,/earlier source/);
  assert.equal(events.filter(event=>event.type==='PREVIEW').length,before,'stale delivery is rejected before rendering or publishing frames');
+});
+
+test('build-first previews reuse exact current pixels, render only missing samples, and invalidate on versions',{timeout:120000},async t=>{
+ const {ctx,invoke,events}=await fixture(t);
+ ctx.executionBudget=createExecutionBudget({builds:3,deliveryFrames:5});
+ const absent=await invoke('preview_3D_scene',{});
+ assert.equal(absent.status,'error');assert.match(absent.error,/build_3D_scene first/);
+ await invoke('x_write',{path:'/scene.js',content:sourceFor(spec())});
+ const built=await invoke('build_3D_scene',{});assert.equal(built.status,'completed',built.error);
+ assert.equal(events.filter(e=>e.type==='PREVIEW').length,0,'first build must not wait for source screenshots');
+ const first=await invoke('preview_3D_scene',{});assert.equal(first.status,'completed',first.error);
+ assert.equal(first.rendered_count,1);assert.deepEqual(first.missing_frames,[]);
+ const frame=first.frames[0],before=ctx.director.state.evidence.length;
+ const reused=await invoke('preview_3D_scene',{frames:[{camera_id:'camera',time:1},{time:1},{camera_id:'camera',time:1}]});
+ assert.equal(reused.rendered_count,0);assert.equal(reused.reused_count,1);assert.equal(reused.frames.length,1);
+ assert.equal(reused.frames[0].evidence_id,frame.evidence_id);assert.equal(reused.frames[0].image_url,frame.image_url);
+ assert.equal(ctx.director.state.evidence.length,before,'cache hit must not mint duplicate evidence');
+ assert.equal(ctx.executionBudget.status().used.deliveryFrames,1);
+ const mixed=await invoke('preview_3D_scene',{frames:[{time:1},{time:0},{time:0}]});
+ assert.equal(mixed.rendered_count,1);assert.equal(mixed.reused_count,1);assert.deepEqual(mixed.frames.map(f=>f.time),[1,0]);
+ const complete=await invoke('preview_3D_scene',{});
+ assert.equal(complete.rendered_count,0);assert.equal(complete.frames.length,0);
+ const exportRetry=await invoke('build_3D_scene',{});
+ assert.equal(exportRetry.reused,true);assert.equal(exportRetry.task_id,built.task_id);assert.deepEqual(exportRetry.missing_frames,[]);
+ assert.equal(ctx.executionBudget.status().used.builds,1);assert.equal(events.filter(e=>e.type==='RESULT').length,1);
+
+ // Cached pixels do not bypass verification of the actual immutable GLB.
+ const glbFile=path.join(ctx.dir,'artifacts',built.task_id,'model.glb'),bytes=await fs.readFile(glbFile);
+ await fs.appendFile(glbFile,'tampered');
+ const corrupt=await invoke('preview_3D_scene',{time:1});assert.equal(corrupt.status,'error');assert.match(corrupt.error,/GLB hash/);
+ await fs.writeFile(glbFile,bytes);
+ await invoke('x_edit',{path:'/scene.js',old_string:'#dd3311',new_string:'#0066ff'});
+ const stale=await invoke('preview_3D_scene',{time:1});assert.equal(stale.status,'error');assert.match(stale.error,/earlier source/);
+ const next=await invoke('build_3D_scene',{});assert.notEqual(next.task_id,built.task_id);
+ const changed=await invoke('preview_3D_scene',{});
+ assert.equal(changed.rendered_count,1);assert.notEqual(changed.frames[0].evidence_id,frame.evidence_id);
+
+ await invoke('coding_todo_write',{op:'set_plan',requestId:'revised-plan',plan});
+ const replanned=await invoke('preview_3D_scene',{});
+ assert.equal(replanned.rendered_count,1,'new plan cannot inherit previous-plan frame evidence');
+ assert.equal(replanned.reused_count,0);
+ const last=replanned.frames[0];await fs.unlink(path.join(ctx.dir,'artifacts',last.task_id,last.image_url.split('/').at(-1)));
+ const missing=await invoke('preview_3D_scene',{time:1});assert.equal(missing.rendered_count,1,'missing cached file must be regenerated');
+ assert.notEqual(missing.evidence_id,last.evidence_id);assert.equal(ctx.executionBudget.status().used.deliveryFrames,5);
+ const exhaustedHit=await invoke('preview_3D_scene',{time:1});
+ assert.equal(exhaustedHit.reused_count,1,'exact cache hits remain usable when new-frame budget is exhausted');
+});
+
+test('unchanged source cannot reuse an export when its evaluated context changes',{timeout:60000},async t=>{
+ const {ctx,invoke}=await fixture(t);
+ const program='function build(ctx){const spec='+JSON.stringify(spec())+';spec.objects[0].material.color=ctx.reference?.color||"#dd3311";return spec;}';
+ await invoke('x_write',{path:'/scene.js',content:program});
+ const first=await invoke('build_3D_scene',{});assert.equal(first.status,'completed',first.error);
+ const same=await invoke('build_3D_scene',{});assert.equal(same.reused,true);assert.equal(same.task_id,first.task_id);
+ ctx.reference={color:'#0066ff'};
+ const changed=await invoke('build_3D_scene',{});assert.equal(changed.status,'completed',changed.error);
+ assert.equal(changed.source_hash,first.source_hash);assert.notEqual(changed.spec_sha256,first.spec_sha256);
+ assert.notEqual(changed.task_id,first.task_id,'same source with different evaluated scene must export again');
+ assert.equal(ctx.current.json.entities.find(e=>e.id==='subject').state.color,'#0066ff');
 });

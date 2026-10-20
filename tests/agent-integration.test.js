@@ -23,26 +23,40 @@ after(()=>{for(const database of testDatabases)database.close();});
 function emptyGlb(){const json=Buffer.from(JSON.stringify({asset:{version:'2.0'},scene:0,scenes:[{nodes:[]}]}));const size=Math.ceil(json.length/4)*4;const b=Buffer.alloc(20+size,32);b.writeUInt32LE(0x46546c67,0);b.writeUInt32LE(2,4);b.writeUInt32LE(b.length,8);b.writeUInt32LE(size,12);b.writeUInt32LE(0x4e4f534a,16);json.copy(b,20);return b;}
 const emptyJson={version:1,entities:[{id:'world',kind:'world',state:{settings:{type:'solid',color:[.22,.24,.27],strength:2}}}],operations:[]};
 
-test('Deep Agents + director todo + draft preview + one accepted GLB build',{timeout:180000},async()=>{
+test('Deep Agents displays first build before inspection, batches correction and accepts current GLB',{timeout:180000},async()=>{
  const projectId='test-'+crypto.randomUUID(),modelRequests=[];let api,server,renderHost;
  const directorPlan={intent:'三秒单机位运动场景，红衣人物与跟拍机位可见',duration:3,aspectRatio:'16:9',
   subjects:[{id:'runner',description:'带红色上衣的人物'}],constraints:[{id:'duration',description:'三秒、16:9',subjectIds:[]}],
   shots:[{id:'shot',start:0,end:3,cameraRef:'camera',purpose:'显示人物运动',subjects:['runner'],action:'人物与相机移动',framing:'全景',movement:'跟随',criterionIds:['structure','appearance','motion']}],
   criteria:[{id:'structure',description:'正确时长、切镜和画幅',kind:'structural',required:true,shotIds:['shot']},{id:'appearance',description:'人物和场景可见',kind:'visual',required:true,shotIds:['shot']},{id:'motion',description:'人物和相机在多个时刻改变位置',kind:'motion',required:true,shotIds:['shot']}],
  };
- const latestTodo=request=>{
+ const latestTool=(request,match)=>{
   for(const message of request.messages.filter(m=>m.role==='tool').reverse()){
-   try{const value=JSON.parse(message.content),state=value.state||value;if(state.plan&&Array.isArray(state.evidence))return state;}catch{}
+   try{const value=JSON.parse(message.content);if(match(value))return value;}catch{}
   }
-  throw Error('Fixture expected a real coding_todo_write state response');
+  throw Error('Fixture expected a real build or preview response');
  };
- const plan=[['x_list',{path:'/'}],['x_read',{path:'/scene-api.txt'}],['coding_todo_write',{op:'set_plan',requestId:'plan-fixture',plan:directorPlan}],
-  ['x_write',{path:'/scene.js',content:sceneSource,overwrite:true}],['x_grep',{pattern:'#ff7711',path:'/scene.js'}],['x_edit',{path:'/scene.js',old_string:'#ff7711',new_string:'#ee3344',replace_all:false}],
-  ['preview_3D_scene',{target:'draft',frames:[0,1.5,3].map(time=>({camera_id:'camera',time}))}],['coding_todo_write',{op:'read'}],
-  ['coding_todo_write',request=>{const state=latestTodo(request),draft=state.evidence.find(e=>e.kind==='draft');assert(draft,'draft registration must return server evidence');return {op:'update_tasks',requestId:'implementation-fixture',tasks:[{id:'implement',title:'编写并检查源码草稿',kind:'implement',status:'completed',dependsOn:[],criterionIds:[],evidenceIds:[draft.id],note:'已检查真实草稿帧'}]};}],
-  ['build_3D_scene',{source:'/scene.js'}],['preview_3D_scene',{target:'build',frames:[0,1.5,3].map(time=>({camera_id:'camera',time}))}],['coding_todo_write',{op:'read'}],
-  ['coding_todo_write',request=>{const state=latestTodo(request),build=state.evidence.find(e=>e.kind==='build'&&e.taskId===state.currentBuild.taskId),frames=state.evidence.filter(e=>e.kind==='frame'&&e.target==='build'&&e.taskId===state.currentBuild.taskId);assert(build);assert.equal(frames.length,3);return {op:'record_reviews',requestId:'acceptance-fixture',reviews:[{criterionId:'structure',verdict:'pass',evidenceIds:[build.id],observation:'服务端结构检查通过'},{criterionId:'appearance',verdict:'pass',evidenceIds:frames.map(f=>f.id),observation:'确定性测试固定场景实际帧已收到'},{criterionId:'motion',verdict:'pass',evidenceIds:frames.map(f=>f.id),observation:'三个时刻对应实际动作帧，自动化测试另比较像素变化'}]};}],
-  ['coding_todo_write',request=>{const state=latestTodo(request),frames=state.evidence.filter(e=>e.kind==='frame'&&e.target==='build'&&e.taskId===state.currentBuild.taskId);return {op:'update_tasks',requestId:'review-completed-fixture',tasks:[{id:'review',title:'检查交付件所有必需标准',kind:'review',status:'completed',dependsOn:['implement'],criterionIds:['structure','appearance','motion'],evidenceIds:frames.map(frame=>frame.id)}]};}],
+ const plan=[['x_list',{path:'/'}],['x_read',{path:'/scene-api.txt'}],['coding_todo_write',{op:'set_plan',requestId:'plan-fixture',plan:directorPlan,tasks:[
+  {id:'implement',title:'创建可播放场景',kind:'implement',status:'in_progress'},
+  {id:'review',title:'检查交付件所有必需标准',kind:'review',status:'pending',dependsOn:['implement'],criterionIds:['structure','appearance','motion']},
+ ]}],
+  ['x_write',{path:'/scene.js',content:sceneSource,overwrite:true}],['build_3D_scene',{}],['preview_3D_scene',{target:'build'}],
+  ['coding_todo_write',request=>{const build=latestTool(request,v=>!!v.glb_url),preview=latestTool(request,v=>Array.isArray(v.frames));return {op:'record_reviews',requestId:'failed-inspection',reviews:[{criterionId:'appearance',verdict:'fail',evidenceIds:preview.frames.map(f=>f.evidence_id),observation:'上衣颜色需要改为指定颜色'}],tasks:[
+   {id:'implement',title:'创建可播放场景',kind:'implement',status:'completed',evidenceIds:[build.evidence_id]},
+   {id:'review',title:'检查初版颜色',kind:'review',status:'completed',dependsOn:['implement'],criterionIds:['appearance']},
+   {id:'correct',title:'修正上衣颜色',kind:'implement',status:'in_progress',dependsOn:['review']},
+  ]};}],
+  ['x_grep',{pattern:'#ff7711',path:'/scene.js'}],['x_edit',{path:'/scene.js',old_string:'#ff7711',new_string:'#ee3344',replace_all:false}],
+  ['build_3D_scene',{}],['preview_3D_scene',{target:'build'}],
+  ['coding_todo_write',request=>{const build=latestTool(request,v=>!!v.glb_url),preview=latestTool(request,v=>Array.isArray(v.frames)),ids=preview.frames.map(f=>f.evidence_id);assert.equal(preview.frames.length,2);assert.deepEqual(preview.missing_frames,[]);return {op:'record_reviews',requestId:'acceptance-fixture',reviews:[
+   {criterionId:'structure',verdict:'pass',evidenceIds:[build.evidence_id],observation:'服务端结构检查通过'},
+   {criterionId:'appearance',verdict:'pass',evidenceIds:ids,observation:'当前交付件实际帧已收到'},
+   {criterionId:'motion',verdict:'pass',evidenceIds:ids,observation:'两个时刻对应实际动作帧，自动化测试另比较像素变化'},
+  ],tasks:[
+   {id:'implement',title:'创建可播放场景',kind:'implement',status:'completed',evidenceIds:[build.evidence_id]},
+   {id:'correct',title:'修正上衣颜色',kind:'implement',status:'completed',dependsOn:['review'],evidenceIds:[build.evidence_id]},
+   {id:'review',title:'检查交付件所有必需标准',kind:'review',status:'completed',dependsOn:['implement'],criterionIds:['structure','appearance','motion'],evidenceIds:ids},
+  ]};}],
  ];
  try{
   // A deterministic model fixture exercises real ChatOpenAI and Deep Agents.
@@ -71,21 +85,22 @@ test('Deep Agents + director todo + draft preview + one accepted GLB build',{tim
   assert(events.some(e=>e.type==='RUN_FINISHED'));
   assert.deepEqual(events.filter(e=>e.type==='TOOL_CALL_START').map(e=>e.toolCallName),plan.map(p=>p[0]));
   assert.equal(modelRequests.at(-1).tool_choice,'none','accepted current build must close tools through the real model transport');
-  const results=events.filter(e=>e.type==='RESULT');assert.equal(results.length,1,'one accepted build is sufficient; successful builds are not a minimum quality count');
-  const draftIndex=events.findIndex(e=>e.type==='PREVIEW'&&e.target==='draft'),buildIndex=events.findIndex(e=>e.type==='RESULT');
-  assert(draftIndex>=0&&draftIndex<buildIndex,'source must be inspectable before the first exported result');
-  assert.equal(events.slice(0,buildIndex).filter(e=>e.type==='PREVIEW'&&e.target==='draft').length,3);
+  const results=events.filter(e=>e.type==='RESULT');assert.equal(results.length,2,'first playable build plus one concrete correction');
+  const previewIndex=events.findIndex(e=>e.type==='PREVIEW'),buildIndex=events.findIndex(e=>e.type==='RESULT');
+  assert(buildIndex>=0&&previewIndex>buildIndex,'playable first result must be published before any screenshot review');
+  assert(!events.some(e=>e.type==='PREVIEW'&&e.target==='draft'));
+  assert(!plan.some(([name,args])=>name==='coding_todo_write'&&args.op==='read'),'successful flow needs no routine state read');
   const acceptance=events.filter(e=>e.type==='DIRECTOR_STATE').at(-1)?.state;
   assert(acceptance?.acceptance?.ready,'final director state must retain accepted current-build evidence');
   assert(acceptance.tasks.some(task=>task.kind==='implement'&&task.status==='completed'),'delivery requires completed implementation work');
   for(const criterion of directorPlan.criteria.filter(c=>c.required))assert(acceptance.tasks.some(task=>task.kind==='review'&&task.status==='completed'&&task.criterionIds.includes(criterion.id)),`completed review task must cover ${criterion.id}`);
-  const result=resultSchema.parse(events.find(e=>e.type==='RESULT').result);
+  const result=resultSchema.parse(results.at(-1).result);
   const glb=Buffer.from(await (await fetch(result.glb_url)).arrayBuffer());validateGlb(glb);assert.equal(glb.length,result.glb_size);
   assert.equal(crypto.createHash('sha256').update(glb).digest('hex'),result.glb_sha256);
   const json=collaborationSchema.parse(await (await fetch(result.collaboration_url)).json());
   assert(json.entities.some(e=>e.id==='runner'));assert.equal(json.entities.find(e=>e.kind==='timeline').state.timeline.duration,3);
   assert.equal(json.entities.find(e=>e.id==='body').state.color,'#ee3344');
-  const preview=events.find(e=>e.type==='PREVIEW'&&e.target==='build'&&e.time===1.5);assert(preview);const png=Buffer.from(await(await fetch(preview.image_url)).arrayBuffer());assert.equal(png.subarray(1,4).toString(),'PNG');
+  const preview=events.find(e=>e.type==='PREVIEW'&&e.task_id===result.task_id&&e.time===3);assert(preview);const png=Buffer.from(await(await fetch(preview.image_url)).arrayBuffer());assert.equal(png.subarray(1,4).toString(),'PNG');
   const sawVision=modelRequests.some(r=>r.messages.some(m=>Array.isArray(m.content)&&m.content.some(p=>p.type==='image_url')));assert(sawVision,'preview pixels must reach model');
   const expectedTools=['x_list','x_read','x_write','x_edit','x_grep','preview_3D_scene','build_3D_scene','coding_todo_write'].sort();
   assert(modelRequests.every(r=>JSON.stringify(r.tools.map(t=>t.function.name).sort())===JSON.stringify(expectedTools)),'every model request must expose exactly eight supported tools');

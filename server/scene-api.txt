@@ -94,13 +94,17 @@ For editable camera paths, path may instead be {id,name,transform,settings,waypo
 BUILD AND PREVIEW:
 build_3D_scene({source:"/scene.js"}) -- source is optional. Executes build(ctx), validates the spec,
  applies it to the current GLB/JSON baseline, and exports immutable local GLB/JSON artifacts.
- Returns {status:"completed",task_id,source,source_hash,source_sha256,glb_url,collaboration_url,glb_size,glb_sha256,triangles}.
-preview_3D_scene({target:"draft",source:"/scene.js",frames:[{camera_id,time:0}]}) -- render source before any build, without exporting or replacing the saved scene. Batch 1-12 frames in one scene load.
-preview_3D_scene({target:"build",frames:[{camera_id,time:0}]}) -- check the actual most recent exported GLB. Legacy {camera_id,time} selects build when one exists, otherwise draft. Explicit invalid cameras fail.
+ Returns {status:"completed",task_id,source,source_hash,source_sha256,glb_url,collaboration_url,glb_size,glb_sha256,triangles,evidence_id,checks,required_frames,missing_frames}.
+ Each successful build immediately displays a playable version, before visual acceptance. An unchanged verified source/baseline reuses the same export and evidence with reused:true.
+preview_3D_scene({target:"build"}) -- default inspection: only capture missing minimum coverage for the current GLB, up to12 frames. Repeat only if returned missing_frames is nonempty.
+preview_3D_scene({target:"build",frames:[{camera_id,time:0}]}) -- inspect explicit action beats. target defaults to build and requires an exported GLB; explicit invalid cameras fail.
+ Identical current-build/camera/time requests reuse saved pixels and evidence, consume no rendering budget, and report rendered_count/reused_count. Duplicate samples within a batch collapse to one.
+preview_3D_scene({target:"draft",source:"/scene.js",frames:[{camera_id,time:0}]}) -- optional source debugging without replacing the saved scene. Never required before first build and never certifies final delivery.
  time is in seconds and must fit the timeline. A missing camera_id follows the active timeline shot. A supplied camera must exist.
- Returns actual camera/time/version/image metadata (or {frames:[...]}) plus image pixels for the next model call.
+ Returns actual camera/time/version/image metadata (or {frames:[...]}) plus source_evidence_id, missing_frames and image pixels for the next model call.
 
-Workflow: x_list/x_read/x_grep context/source → x_write/x_edit → draft previews → fix source → build_3D_scene → build previews at cuts/key actions/end → concise Chinese delivery.
+Workflow: read context/source → set_plan with initial tasks → x_write/x_edit → build_3D_scene (display first) → build previews → record_reviews with task updates → concentrate required fixes → rebuild and inspect current version → concise Chinese delivery.
+Default budget is one initial build plus two correction builds. Follow the returned execution budget; unresolved criteria produce partial delivery, never fabricated passes.
 The frontend keeps its existing tool status display, staging validation, scene/timeline update, and local GLB/JSON autosave/recovery; no new UI entry is needed.
 Build failures return status:error with an actionable message. Never claim completion after a failed build.
 preview returns actual PNG pixels to the model; inspect them before saying the scene is checked.
@@ -111,6 +115,8 @@ coding_todo_write({op:"set_plan",requestId:"unique-plan",plan:{intent,duration,a
 Shots cover 0-duration contiguously. cameraRef must match the actual stable scene camera id. Do not omit explicit user requirements from criteria. Existing required criteria cannot be removed or weakened inside this run.
 coding_todo_write({op:"update_tasks",requestId:"unique-tasks",tasks:[{id,title,kind:"plan"|"implement"|"review"|"deliver",status:"pending"|"in_progress"|"completed"|"blocked"|"cancelled",dependsOn:[],criterionIds:[],evidenceIds:[],note:""}]})
 coding_todo_write({op:"record_reviews",requestId:"unique-review",reviews:[{criterionId,verdict:"pass"|"fail"|"unverified",evidenceIds:[],observation:"actual observation"}]})
-coding_todo_write({op:"read"}) returns revision, plan, tasks, review and current evidence summary. expectedRevision is optional for mutations; stale values are rejected. requestId is unique per distinct mutation and stable when retrying the same mutation.
-Implementation completion needs a draft source_evidence_id or build evidence_id. Review completion means inspection performed, not every criterion passing. Save reviews separately before marking review tasks complete. Failure observations must remain visible.
-Draft frame evidence supports corrections; final acceptance requires current exported build evidence. Structural pass uses build evidence_id. Visual pass needs current frames from each criterion shot; motion pass needs at least two distinct times per affected shot. Build returns required_frames; capture them in batches up to12. Do not mark all tasks completed before actual inspections. Blocked tasks need specific explanation.
+set_plan accepts optional tasks: same task objects as update_tasks. Prefer plan and initial tasks in one call.
+record_reviews accepts optional tasks: observations and completed inspection / corrective tasks commit atomically, after review validation. An invalid task or review rejects the whole batch; no partial mutation is saved.
+coding_todo_write({op:"read"}) returns revision, plan, tasks, reviews, missingFrames and current usable evidence. Successful mutation responses already include this summary; read only on conflict or recovery. expectedRevision is optional for mutations; stale values are rejected. requestId is unique per distinct mutation and stable when retrying the same mutation.
+Implementation completion needs current source/build/frame evidence. Review completion means inspection performed, not every criterion passing. Failure observations must remain visible; include them and corrective tasks in one record_reviews call.
+Final acceptance requires current exported build evidence. Structural pass uses build evidence_id. Visual pass needs current frames from each criterion shot; motion pass needs at least two distinct times per affected shot. Minimum required_frames is one representative time per shot or two boundary times for shots with required motion. Add action beats as necessary to establish requested behavior. New source, plan or build invalidates earlier acceptance. Do not mark all tasks completed before actual inspections. Blocked tasks need specific explanation.

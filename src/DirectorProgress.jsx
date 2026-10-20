@@ -11,7 +11,7 @@ export default function DirectorProgress({state}){
  const evidence=Array.isArray(state.evidence)?state.evidence:Object.values(state.evidence||{});
  const done=tasks.filter(t=>t.status==='completed').length;
  return <details className="director-progress">
-  <summary>{outcomes[state.outcome]||'制作与验收'}{tasks.length?` · ${done}/${tasks.length} 项任务`:''}</summary>
+  <summary>{outcomes[state.outcome]||(state.currentBuild?'场景已构建 · 检查中':'制作与验收')}{tasks.length?` · ${done}/${tasks.length} 项任务`:''}</summary>
   {state.reason&&<p>{state.reason}</p>}
   {plan&&<details><summary>分镜计划 · {plan.shots.length} 个镜头 · {plan.duration} 秒 · {plan.aspectRatio}</summary>
    <p>{plan.intent}</p><ol>{plan.shots.map(shot=><li key={shot.id}><strong>{shot.start}–{shot.end} 秒 · {shot.purpose}</strong><p>{shot.action}</p><p>{shot.framing}{shot.movement?` · ${shot.movement}`:''}</p></li>)}</ol>

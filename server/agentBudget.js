@@ -33,7 +33,7 @@ export function executionLimits(env=process.env){
   tools:bounded(env.AGENT_MAX_TOOL_CALLS,100,8,1000),
   draftFrames:bounded(env.AGENT_MAX_DRAFT_FRAMES,48,1,240),
   deliveryFrames:bounded(env.AGENT_MAX_DELIVERY_FRAMES,36,1,120),
-  builds:bounded(env.AGENT_MAX_BUILD_PASSES,6,1,30),
+  builds:bounded(env.AGENT_MAX_BUILD_PASSES,3,1,30),
   buildFailures:bounded(env.AGENT_MAX_BUILD_FAILURES,3,1,20),
   consecutiveErrors:bounded(env.AGENT_MAX_CONSECUTIVE_ERRORS,3,1,20),
   totalMs:bounded(env.AGENT_GENERATION_TIMEOUT_MS,720000,1000,3600000),

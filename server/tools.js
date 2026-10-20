@@ -11,6 +11,7 @@ import {evaluateProgram} from './program.js';
 import {renderCall} from './renderService.js';
 import {CodingTodo,codingTodoToolSchema} from './codingTodo.js';
 import {directorSummary} from './directorSummary.js';
+import {timelineCameraId} from '../src/timelineCamera.js';
 
 export function createSceneTools(ctx){
  const {dir,emit,signal,projectId}=ctx;
@@ -55,19 +56,34 @@ export function createSceneTools(ctx){
   notify('x_write',async args=>{const result=await writeWorkspace(dir,args);if(args.path===(ctx.activeSourcePath||'/scene.js')||args.path===current?.result?.source)await noteSource(args.path);return result;},z.object({path:virtual,content:source,overwrite:z.boolean().default(false)}),'Write a scene program into the project workspace. Use self-contained function build(ctx), returning the documented scene JSON specification. No imports, Three.js calls, shell or network inside the program. Context and scene API files are read-only.'),
   notify('x_edit',async args=>{const result=await editWorkspace(dir,args);if(args.path===(ctx.activeSourcePath||'/scene.js')||args.path===current?.result?.source)await noteSource(args.path);return result;},z.object({path:virtual,old_string:source,new_string:source,replace_all:z.boolean().default(false)}),'Apply an exact text edit to an existing scene program. Ambiguous matches are rejected. Read the current program before editing. Context and scene API files are read-only.'),
   notify('x_grep',args=>grepWorkspace(dir,args,signal),z.object({pattern:z.string().min(1).max(1000).describe('Literal text to search, not a regular expression.'),path:z.string().default('/').describe('Virtual workspace file or directory to search.'),case_sensitive:z.boolean().default(true),max_results:z.number().int().min(1).max(1000).default(100)}),'Find literal text in a workspace file or recursively in a directory. Returns matches with virtual path, 1-based line and text, plus truncated. Use to locate stable node IDs and code before x_read/x_edit. No regex or shell execution.'),
-  notify('coding_todo_write',async args=>({status:'completed',state:directorSummary(await (await director()).apply(args))}),codingTodoToolSchema,'Persist directing plan, outcome tasks and evidence-based reviews. op:read returns state; set_plan creates shots and criteria; update_tasks upserts tasks; record_reviews stores pass/fail/unverified observations separately. Mutations require unique requestId. A completed review may find failure. Evidence IDs must be issued by actual previews/builds, never invented.'),
+  notify('coding_todo_write',async args=>({status:'completed',state:directorSummary(await (await director()).apply(args))}),codingTodoToolSchema,'Persist directing plan, outcome tasks and evidence-based reviews. set_plan accepts plan AND initial tasks in one atomic call. record_reviews accepts reviews AND task updates in one atomic call, including completed inspection or corrective work after failure. update_tasks remains available. read is for recovery; successful responses already contain current evidence and missingFrames. Mutations require unique requestId. Evidence IDs must be issued by actual previews/builds, never invented.'),
   notify('build_3D_scene',async({source:virtualPath})=>{
-   const buildBudget=ctx.executionBudget?.check('builds');if(buildBudget&&!buildBudget.allowed){ctx.finishReason='本轮交付构建预算已用完。';throw Error(ctx.finishReason);}
-   if(!(await director()).state.plan)throw Error('Set a director plan before exporting. Source draft previews are available before build.');
+   if(!(await director()).state.plan)throw Error('Set a director plan and initial tasks, then build to display the first playable scene.');
    const sourceCode=await fs.readFile((await workspaceTarget(dir,virtualPath)).file,'utf8');
    const baseJson=baselineJson;
    const spec=await evaluateProgram(sourceCode,{scene:baseJson,reference:ctx.reference,assets:ctx.assets.map(({id,name,kind})=>({id,name,kind}))},signal);
+   // Retrying an unchanged export must not replace its identity or discard
+   // current frame/review evidence. Verify the actual file before reusing it.
+   if(current?.result.source_sha256===sha256(sourceCode)&&current.result.spec_sha256===sha256(JSON.stringify(spec))&&current.result.baseline_revision===sceneBinding(spec,baseJson)){
+    const bytes=await fs.readFile(path.join(dir,'artifacts',current.result.task_id,'model.glb')).catch(error=>{if(error.code==='ENOENT')return null;throw error;});
+    if(bytes&&sha256(bytes)===current.result.glb_sha256){
+     const state=ctx.director.snapshot();
+     const evidence=state.currentBuild?.taskId===current.result.task_id&&state.currentBuild.planRevision===state.planRevision
+      ?state.evidence.find(e=>e.id===state.currentBuild.evidenceId)
+      :await ctx.director.registerBuild({taskId:current.result.task_id,sourceHash:current.result.source_sha256,baselineRevision:current.result.baseline_revision,json:current.json,artifactHash:current.result.glb_sha256});
+     // An edit followed by an undo may have invalidated the source binding.
+     await ctx.director.noteSource({sourceHash:current.result.source_sha256,baselineRevision:current.result.baseline_revision});
+     ctx.activeSourcePath=virtualPath;
+     return {...current.result,source:virtualPath,reused:true,evidence_id:evidence.id,checks:evidence.checks,required_frames:ctx.director.snapshot().requiredFrames,missing_frames:ctx.director.missingFrames()};
+    }
+   }
+   const buildBudget=ctx.executionBudget?.check('builds');if(buildBudget&&!buildBudget.allowed){ctx.finishReason='本轮交付构建预算已用完。';throw Error(ctx.finishReason);}
    const built=await renderCall('compile',{spec,baseUrl:baselineUrl,baseJson,assets:ctx.assets},signal);
    const bytes=Buffer.from(built.glb,'base64');if(bytes.length>MAX_GLB)throw Error('GLB exceeds 100 MiB');
    if(JSON.stringify(built.json).length>0x1400000)throw Error('Collaboration JSON exceeds limit');
    const taskId=crypto.randomUUID(),out=path.join(dir,'artifacts',taskId);await fs.mkdir(out,{recursive:true});
    const prefix=`${BASE}/artifacts/${projectId}/${taskId}`;
-   const result={status:'completed',task_id:taskId,source:virtualPath,source_sha256:sha256(sourceCode),source_hash:sha256(sourceCode),baseline_revision:sceneBinding(spec,baseJson),glb_url:prefix+'/model.glb',collaboration_url:prefix+'/collaboration.json',glb_size:bytes.length,glb_sha256:sha256(bytes),triangles:built.triangles};
+   const result={status:'completed',task_id:taskId,source:virtualPath,source_sha256:sha256(sourceCode),source_hash:sha256(sourceCode),spec_sha256:sha256(JSON.stringify(spec)),baseline_revision:sceneBinding(spec,baseJson),glb_url:prefix+'/model.glb',collaboration_url:prefix+'/collaboration.json',glb_size:bytes.length,glb_sha256:sha256(bytes),triangles:built.triangles};
    // Publish only after both immutable files exist.
    await atomicWrite(path.join(out,'model.glb'),bytes);await atomicWrite(path.join(out,'collaboration.json'),JSON.stringify(built.json));
    await atomicWrite(path.join(out,'result.json'),JSON.stringify(result));
@@ -76,29 +92,34 @@ export function createSceneTools(ctx){
    ctx.executionBudget?.consume('builds');
    ctx.completedBuilds=(ctx.completedBuilds||0)+1;ctx.previewChecks=[];
    await atomicWrite(path.join(dir,'latest-build.json'),JSON.stringify(current));
-   if(ctx.director){const evidence=await ctx.director.registerBuild({taskId,sourceHash:result.source_sha256,baselineRevision:result.baseline_revision,json:built.json,artifactHash:result.glb_sha256});result.evidence_id=evidence.id;result.required_frames=ctx.director.snapshot().requiredFrames;}
+   if(ctx.director){const evidence=await ctx.director.registerBuild({taskId,sourceHash:result.source_sha256,baselineRevision:result.baseline_revision,json:built.json,artifactHash:result.glb_sha256});result.evidence_id=evidence.id;result.required_frames=ctx.director.snapshot().requiredFrames;result.missing_frames=ctx.director.missingFrames();result.checks=evidence.checks;}
    emit({type:'RESULT',result});return result;
-  },z.object({source:virtual.default('/scene.js')}),'Compile the workspace scene program into validated editable GLB and collaboration JSON. Returns completed/task_id/glb_url/collaboration_url/glb_size/glb_sha256/triangles. Each successful build is immediately delivered to the user. Fix source errors and rebuild if needed.'),
+  },z.object({source:virtual.default('/scene.js')}),'Build FIRST after source is ready: validate and export editable GLB/JSON, immediately showing the playable scene to the user while inspection continues. Then preview the exported build and fix concrete failures together. Returns evidence_id, structural checks and missing_frames. Unchanged source/baseline reuses the verified export and its evidence; do not rebuild without edits.'),
   notify('preview_3D_scene',async({target,source:virtualPath,camera_id,time,frames},callId)=>{
-   const selected=target||(current?'build':'draft');
-   const requests=frames||[{camera_id,time}];
-   const frameBudget=ctx.executionBudget?.check(selected==='draft'?'draftFrames':'deliveryFrames',requests.length);if(frameBudget&&!frameBudget.allowed){ctx.finishReason='本轮预览帧预算已用完。';throw Error(ctx.finishReason);}
-   let rendered,sourceHash,baselineRevision,taskId,sourceEvidence;
+   const selected=target||'build';
+   let requests=frames||[{camera_id,time:time??0}],rendered,sourceHash,baselineRevision,taskId,sourceEvidence;
+   const cached=[];
+   const checkBudget=count=>{
+    const budget=ctx.executionBudget?.check(selected==='draft'?'draftFrames':'deliveryFrames',count);
+    if(budget&&!budget.allowed){ctx.finishReason='本轮预览帧预算已用完。';throw Error(ctx.finishReason);}
+   };
+   requests=requests.filter((frame,index)=>requests.findIndex(other=>other.camera_id===frame.camera_id&&other.time===frame.time)===index);
    if(selected==='draft'){
     const sourceCode=await fs.readFile((await workspaceTarget(dir,virtualPath)).file,'utf8');
     const baseJson=baselineJson;
     sourceHash=sha256(sourceCode);
     const spec=await evaluateProgram(sourceCode,{scene:baseJson,reference:ctx.reference,assets:ctx.assets.map(({id,name,kind})=>({id,name,kind}))},signal);
     baselineRevision=sceneBinding(spec,baseJson);
+    checkBudget(requests.length);
     rendered=await renderCall('draftPreview',{spec,baseUrl:baselineUrl,baseJson,assets:ctx.assets,frames:requests.map(f=>({cameraId:f.camera_id,time:f.time}))},signal);
     taskId=crypto.randomUUID();ctx.activeSourcePath=virtualPath;
     if(ctx.director)sourceEvidence=await ctx.director.registerDraft({sourceHash,baselineRevision,json:rendered.json});
    }else{
-    if(!current)throw Error('No exported build exists. Use target:"draft" to preview source before building.');
+    if(!current)throw Error('No exported build exists. Call build_3D_scene first to display the playable scene.');
     sourceHash=current.result.source_sha256;baselineRevision=current.result.baseline_revision;taskId=current.result.task_id;
     const bytes=await fs.readFile(path.join(dir,'artifacts',taskId,'model.glb'));
     if(ctx.director){
-     const authored=await fs.readFile((await workspaceTarget(dir,current.result.source||virtualPath)).file,'utf8');
+     const authored=await fs.readFile((await workspaceTarget(dir,ctx.activeSourcePath||current.result.source||virtualPath)).file,'utf8');
      if(sha256(authored)!==sourceHash)throw Error('The exported GLB belongs to an earlier source. Build the current source before reviewing this delivery.');
      if(sha256(bytes)!==current.result.glb_sha256)throw Error('Exported GLB hash does not match its immutable build record. Rebuild before reviewing this delivery.');
      const state=ctx.director.snapshot();
@@ -107,21 +128,47 @@ export function createSceneTools(ctx){
       sourceEvidence=await ctx.director.registerBuild({taskId,sourceHash,baselineRevision,json:current.json,artifactHash:current.result.glb_sha256});
      }else sourceEvidence=state.evidence.find(record=>record.id===state.currentBuild.evidenceId);
     }
-    rendered=await renderCall('previewBatch',{glb:bytes.toString('base64'),json:current.json,frames:requests.map(f=>({cameraId:f.camera_id,time:f.time}))},signal);
+    // Default to the server's missing coverage; callers can still request exact
+    // action beats. Resolve implicit cameras before deduplicating and caching.
+    if(!frames&&time===undefined&&camera_id===undefined&&ctx.director?.state.plan)requests=ctx.director.missingFrames().slice(0,12);
+    const timeline=current.json.entities.find(e=>e.kind==='timeline')?.state.timeline;
+    const cameras=current.json.entities.filter(e=>e.kind==='camera'&&!e.deleted);
+    requests=requests.map(frame=>{
+     if(Number.isFinite(timeline?.duration)&&frame.time>timeline.duration)throw Error('Time exceeds timeline duration '+timeline.duration);
+     const id=frame.camera_id??timelineCameraId(timeline?.shots||[],frame.time,timeline?.duration??0);
+     const camera=id===null||id===undefined?cameras[0]:cameras.find(e=>e.id===id);
+     if(!camera)throw Error(id?'Preview camera not found: '+id:'Preview requires a camera');
+     return {camera_id:camera.id,time:frame.time};
+    }).filter((frame,index,all)=>all.findIndex(other=>other.camera_id===frame.camera_id&&other.time===frame.time)===index);
+    const state=ctx.director?.snapshot(),pending=[];
+    for(const request of requests){
+     const evidence=state?.evidence.findLast(e=>e.kind==='frame'&&e.target==='build'&&e.planRevision===state.planRevision&&e.sourceHash===sourceHash&&e.baselineRevision===baselineRevision&&e.taskId===taskId&&e.cameraId===request.camera_id&&e.time===request.time);
+     const filename=evidence?.imageUrl?.split('/').at(-1);
+     let exists=false;
+     if(filename&&/^preview-[\w-]+\.png$/.test(filename))try{await fs.access(path.join(dir,'artifacts',taskId,filename));exists=true;}catch{}
+     if(exists)cached.push({status:'completed',target:selected,task_id:taskId,source_hash:sourceHash,baseline_revision:baselineRevision,camera_id:request.camera_id,time:request.time,width:evidence.width,height:evidence.height,image_url:evidence.imageUrl,evidence_id:evidence.id,reused:true});
+     else pending.push(request);
+    }
+    checkBudget(pending.length);
+    rendered=pending.length?await renderCall('previewBatch',{glb:bytes.toString('base64'),json:current.json,frames:pending.map(f=>({cameraId:f.camera_id,time:f.time}))},signal):{frames:[]};
    }
-   ctx.executionBudget?.consume(selected==='draft'?'draftFrames':'deliveryFrames',requests.length);
+   ctx.executionBudget?.consume(selected==='draft'?'draftFrames':'deliveryFrames',rendered.frames.length);
    const out=path.join(dir,'artifacts',taskId);await fs.mkdir(out,{recursive:true});
    const saved=[],refs=[];
    for(const frame of rendered.frames){
     const filename=`preview-${crypto.randomUUID()}.png`;
     await atomicWrite(path.join(out,filename),Buffer.from(frame.image,'base64'));
     const data={status:'completed',target:selected,task_id:taskId,source_hash:sourceHash,baseline_revision:baselineRevision,camera_id:frame.cameraId,time:frame.time,width:frame.width,height:frame.height,image_url:`${BASE}/artifacts/${projectId}/${taskId}/${filename}`};
-    saved.push(data);refs.push({taskId,file:filename,cameraId:frame.cameraId,time:frame.time});
+    saved.push(data);
     if(selected==='build')(ctx.previewChecks||=[]).push(data);
     emit({type:'PREVIEW',...data});
    }
-   if(ctx.director){const evidence=await ctx.director.registerFrames({target:selected,sourceHash,baselineRevision,taskId,frames:saved});evidence.forEach((record,i)=>{saved[i].evidence_id=record.id;refs[i].evidenceId=record.id;});}
-   return new ToolMessage({tool_call_id:callId,content:JSON.stringify(frames?{status:'completed',target:selected,source_evidence_id:sourceEvidence?.id,frames:saved}:{...saved[0],source_evidence_id:sourceEvidence?.id}),artifact:{previewRefs:refs}});
-  },z.object({target:z.enum(['draft','build']).optional().describe('draft previews current source without exporting or replacing the saved scene; build checks an exported GLB.'),source:virtual.default('/scene.js'),camera_id:z.string().optional(),time:z.number().min(0).max(600).default(0),frames:z.array(z.object({camera_id:z.string().optional(),time:z.number().min(0).max(600)})).min(1).max(12).optional()}),'Render actual source draft or exported build frames. Use target:draft before the first build to inspect and repair composition, motion and occlusion cheaply. Batch up to 12 camera/time samples. Explicit invalid camera IDs fail. Draft previews never publish a scene result or replace the saved project. Build previews verify the actual delivery artifact.'),
+   if(ctx.director&&saved.length){const evidence=await ctx.director.registerFrames({target:selected,sourceHash,baselineRevision,taskId,frames:saved});evidence.forEach((record,i)=>saved[i].evidence_id=record.id);}
+   const combined=[...saved,...cached].sort((a,b)=>requests.findIndex(f=>f.camera_id===a.camera_id&&f.time===a.time)-requests.findIndex(f=>f.camera_id===b.camera_id&&f.time===b.time));
+   for(const frame of combined)refs.push({taskId:frame.task_id,file:frame.image_url.split('/').at(-1),cameraId:frame.camera_id,time:frame.time,evidenceId:frame.evidence_id});
+   const batch=frames||time===undefined&&camera_id===undefined;
+   const coverage=ctx.director?{missing_frames:ctx.director.missingFrames()}:{};
+   return new ToolMessage({tool_call_id:callId,content:JSON.stringify({...(batch?{status:'completed',target:selected,frames:combined}:combined[0]),source_evidence_id:sourceEvidence?.id,...coverage,rendered_count:saved.length,reused_count:cached.length}),artifact:{previewRefs:refs}});
+  },z.object({target:z.enum(['draft','build']).optional().describe('Default build after first export; draft is optional source debugging.'),source:virtual.default('/scene.js'),camera_id:z.string().optional(),time:z.number().min(0).max(600).optional(),frames:z.array(z.object({camera_id:z.string().optional(),time:z.number().min(0).max(600)})).min(1).max(12).optional()}),'Inspect the displayed GLB after build. With no camera/time/frames, render only missing required samples (up to 12), returning remaining missing_frames and evidence IDs. Exact duplicate current-build samples reuse saved pixels/evidence without rendering or consuming frame budget. Batch key action beats; only sample affected shots after concrete fixes. Source edits or new builds invalidate old frame evidence. target:draft is optional debugging, never a prerequisite for first build.'),
  ];
 }
