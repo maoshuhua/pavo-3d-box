@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { sceneBounds as eaK } from "./libtvCameraRig.js";
+import {cameraFrameAspect} from './timelineCamera.js';
 // libtv elU/elK/elH/el$: published monitor capture, scheduling and disposal.
 const elF = 1000 / 24,
   elq = "topView",
@@ -7,12 +8,8 @@ const elF = 1000 / 24,
   elW = 16 / 9,
   _x = "blockingStudioAspect";
 const eln = (runtime, id) => {
-  const project = runtime.editableRoot.userData.libtvProjectAspect;
-  if (Number.isFinite(project) && project > 0) return project;
-  const aspect = runtime.editableRoot.getObjectByProperty("uuid", id)?.userData[
-    _x
-  ];
-  return Number.isFinite(aspect) ? aspect : null;
+  return cameraFrameAspect(runtime.editableRoot.userData.libtvProjectAspect,
+    runtime.editableRoot.getObjectByProperty("uuid", id));
 };
 // Adapter for ea3: clean offscreen render through the existing renderer and scene.
 function ea3(size, runtime, id) {
@@ -251,6 +248,7 @@ function elK(e, t, n, r, i = !0, o = !1, a = !1, l = null) {
               n.push({
                 id: r.uuid,
                 name: "string" == typeof r.name ? r.name : "",
+                aspect: eln(t,r.uuid),
               }),
             i(r.fov),
             i(r.zoom),

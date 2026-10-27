@@ -15,3 +15,17 @@ export function resolveAgentModel(key,env=process.env) {
  if(!model)throw Error('请在 .env 配置 AGENT_MODEL 或 AGENT_MODELS。');
  return model.key;
 }
+
+export function agentModelTransport(model) {
+ // The installed LangChain resolver does not yet recognize these Responses-only
+ // tool-calling models. Keep routing explicit, including provider-prefixed IDs.
+ if(/(?:^|\/)gpt-(?:6\.1-sol|6-astra)(?:-|$)/i.test(model||''))return {
+  useResponsesApi:true,
+  supportsStrictToolCalling:false,
+  // Checkpoints own conversation state; encrypted reasoning travels with the
+  // transcript without requiring provider-side response storage.
+  modelKwargs:{store:false,include:['reasoning.encrypted_content']},
+ };
+ if(/^deepseek-v4\.1-flash$/i.test(model||''))return {modelKwargs:{reasoning_effort:'none'}};
+ return {};
+}

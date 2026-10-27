@@ -1,86 +1,102 @@
-Scene program contract (local implementation, not libtv's private server API)
+场景程序协议（本地实现，不是 LibTV 的私有服务端接口）
 
-Write /scene.js defining function build(ctx) { return SPEC; }. No import/export or async.
-This runs in QuickJS with Math/JSON only. Loops and helper functions work.
-ctx.scene = current collaboration JSON (entities with stable id/kind/state).
-ctx.reference = selected entity or timeline clip, including stable id and times.
-ctx.assets = uploaded file descriptors {id,name,kind}; GLB assets can be inserted.
-The only model tools are x_list, x_read, x_write, x_edit, x_grep, preview_3D_scene, build_3D_scene.
-Read /context.json and /scene-api.txt with x_read. Existing source can be read at /scene.js.
-Use x_list to locate source files; use x_grep to find exact text or stable entity IDs before editing.
-File tools access only this project's workspace .js/.json/.txt/.md files. A leading / is a virtual project path.
-Disk absolute paths, parent traversal (..), and symlinks are rejected. /context.json and /scene-api.txt are read-only.
-Single text file reads are limited to 32 MiB. x_read/x_grep text output is limited to 64000 characters.
-Directory scans inspect at most 10000 entries and descend at most 64 levels; output/scan limits set truncated.
-When truncated, narrow the directory/search or read smaller line ranges; do not treat partial results as complete.
+新建场景按下文多文件分层编写：/manifest.json 声明模块和依赖，/scene.js 定义 function build(ctx,modules) { return SPEC; }。无清单时兼容原有 build(ctx)。禁止 import/export、async、Three.js、网络和命令行调用。
+程序在 QuickJS 内执行，只提供 Math/JSON；可使用循环和辅助函数。
+ctx.scene：当前协作 JSON，实体包含稳定 id/kind/state。
+ctx.reference：选中的实体或时间轴片段，包含稳定 ID 和时间。
+ctx.assets：已上传素材描述 {id,name,kind}，可导入 GLB 素材。
+仅可调用八个工具：x_list、x_read、x_write、x_edit、x_grep、x_copy、preview_3D_scene、build_3D_scene。
+所有执行说明、画面检查反馈和最终总结均使用简体中文；代码、字段、工具名和路径保持原样。
+先用 x_list 查看目录，再用 x_read 读取 /context.json、/scene-api.txt 和已有 /scene.js；用 x_grep 定位待改文本或稳定实体 ID。
+文件工具仅访问当前项目工作区内的 .js/.json/.txt/.md 文件，开头的 / 代表项目虚拟路径。
+禁止磁盘绝对路径、.. 越界和符号链接。/context.json、/scene-api.txt 只读。
+单文件读取上限 32 MiB；x_read/x_grep 文本输出上限 64000 字符。
+目录扫描最多 10000 项、64 层；输出或扫描触限时返回 truncated。
+截断时缩小目录或搜索范围，或分段读取；不能将部分结果当成完整结果。
 
-FILE TOOLS:
-x_list({path:"/",recursive:false,max_entries:200}) -- all fields optional; max_entries 1..1000.
- Returns {status:"completed",path,entries:[{path,type:"file"|"directory",bytes?}],truncated}.
-x_read({path,offset:0,column:0,limit:300}) -- offset is a zero-based line offset; column is a zero-based character offset in the first returned line; limit 1..1000.
- Returns {status:"completed",path,totalLines,offset,content,truncated,next?}; content includes original 1-based line numbers.
- Only when truncated is true, next:{offset,column} is returned; pass it directly into the next x_read call.
- This cursor also resumes a single line longer than 64000 characters. Complete results omit next.
-x_write({path,content,overwrite:false}) -- create a text file; explicit overwrite required for an existing file; max 1 MiB, including UTF-8 byte validation.
- Returns {status:"completed",path,bytes,sha256}.
-x_edit({path,old_string,new_string,replace_all:false}) -- exact text replacement; default requires one unique match.
- Returns {status:"completed",path,replacements,sha256}.
-x_grep({pattern,path:"/",case_sensitive:true,max_results:100}) -- pattern is nonempty literal text, not regex.
- path may name a file or directory; directory search is recursive; max_results 1..1000.
- Returns {status:"completed",pattern,path,matches:[{path,line,text,textOffset?,textTruncated?}],truncated}; line is 1-based.
- For a long line, text is a nearby excerpt containing the match; textOffset is its zero-based character position in the original line and textTruncated is true.
- Ordinary short-line matches omit textOffset and textTruncated.
-Optional fields above show defaults. Tool errors return {status:"error",error}; inspect and fix before retrying.
+文件工具：
+x_list({path:"/",recursive:false,max_entries:200})：参数均可选；max_entries 范围 1..1000。
+ 返回 {status:"completed",path,entries:[{path,type:"file"|"directory",bytes?}],truncated}。
+x_read({path,offset:0,column:0,limit:300})：offset 是从 0 开始的行偏移；column 是首行内从 0 开始的字符偏移；limit 范围 1..1000。
+ 返回 {status:"completed",path,totalLines,offset,content,truncated,next?}，content 带从 1 开始的原始行号。
+ 仅截断时返回 next:{offset,column}，将该游标用于下一次 x_read，即可继续读取，包括超长行。
+x_write({path,content,overwrite:false})：新建文本文件；覆盖须显式指定；按 UTF-8 字节校验，最大 1 MiB。
+ 返回 {status:"completed",path,bytes,sha256}。
+x_edit({path,old_string,new_string,replace_all:false})：精确替换；默认必须唯一匹配。
+ 返回 {status:"completed",path,replacements,sha256}。
+x_copy({source,destination,overwrite:false})：复制单个工作区文件，最大 1 MiB，保留字节，自动创建目标父目录；默认不覆盖。
+ 禁止源目标相同，不可写入只读文件。返回 {status:"completed",source,destination,bytes,sha256,overwritten}。
+ 可在修改前备份；恢复时复制到 /scene.js 并显式覆盖，再构建。复制本身不更新画面。
+x_grep({pattern,path:"/",case_sensitive:true,max_results:100})：非空字面文本搜索，不是正则表达式。
+ path 可为文件或目录，目录内递归搜索；max_results 范围 1..1000。
+ 返回 {status:"completed",pattern,path,matches:[{path,line,text,textOffset?,textTruncated?}],truncated}；line 从 1 开始。
+ 超长行只返回命中附近片段，textOffset 为片段在原行内从 0 开始的位置，textTruncated 为 true；普通短行省略这两个字段。
+上述可选参数展示的是默认值。工具错误返回 {status:"error",error}；检查原因并修复后再试。
 
-SPEC:
+多文件分层与加载：
+新建场景采用以下职责目录；仅创建实际需要的模块，不按固定物品或场景类型硬编码。
+ /scene.js：组装入口；/manifest.json：文件清单及依赖图。
+ /shared/constants.js、identifiers.js、utils.js：公共约定、稳定 ID、纯辅助函数。
+ /definitions/materials.js、components.js：可复用材质与组件构造。
+ /content/*.js：职责独立的场景内容。
+ /behavior/hierarchy.js、animation.js：层级关系与动画。
+ /presentation/world.js、lighting.js、cameras.js、timeline.js：画面呈现。
+ /assembly/merge.js、validate.js：合并与跨模块检查。服务端仍会执行强制规格校验。
+ manifest 格式：{version:1,entry:"/scene.js",modules:[{path:"/shared/constants.js",dependsOn:[]},{path:"/content/main.js",dependsOn:["/shared/constants.js"]}]}。
+ 每个模块定义 function create(ctx,deps)，返回该模块的公开数据或函数；deps 仅含 dependsOn 声明的模块，按完整虚拟路径索引。
+ /scene.js 定义 function build(ctx,modules)，modules 按完整虚拟路径索引所有模块结果。入口自行调用公开函数并合并为一个 SPEC，不自动拼接数组、不隐式覆盖同名实体。
+ 各文件函数作用域独立，依赖按拓扑顺序初始化；不允许 import/export/require 或主机文件访问。模块使用 deps，不依赖其他文件全局变量。
+ 清单最多 100 个模块，入口/清单/所有模块源码合计及组装后执行代码各不超过 1 MiB；循环依赖、重复路径、缺失依赖、非法路径、清单入口与 source 不一致均报错。未列入清单的文件不执行。
+ 不同文件的 x_write/x_edit/x_read/x_copy 可以同轮并行；同一路径（忽略大小写）串行；copy 同时占用源和目标。build/preview/list/grep 为顺序屏障：等待先前文件操作完成，并阻止后续写入抢先执行。
+ 无 /manifest.json 时兼容原有单文件 function build(ctx)。不能只写部分模块便调用构建；先处理所有写入失败。
+ 构建结果附带 sources:[{path,sha256}]；多文件 source_hash/source_sha256 是按确定顺序组装的完整执行源码哈希，修改依赖文件会改变该哈希。
+
+场景规格 SPEC：
 {
  version:1,
- mode:"patch", // default; retain all existing objects/animations. "replace" only when explicitly creating a new scene.
+ mode:"patch", // 默认保留所有已有对象和动画；仅明确新建整个场景时使用 replace。
  objects:[
-  {id:"stable-id", type:"mesh", name:"Unique readable name", parentId:null,
-   transform:{position:[0,0,0],rotation:[0,0,0,1],scale:[1,1,1]}, visible:true,
-   geometry:{type:"box",args:[width,height,depth]},
+  {id:"stable-id",type:"mesh",name:"唯一且易读的名称",parentId:null,
+   transform:{position:[0,0,0],rotation:[0,0,0,1],scale:[1,1,1]},visible:true,
+   geometry:{type:"box",args:[1,2,3]},
    material:{color:"#ffaa00",metallic:0,roughness:0.7}}
  ],
- remove:[],
- animations:[],
- operations:[]
+ remove:[],animations:[],operations:[]
 }
+局部修改时省略的可选节点字段保留原值。已有 ID 代表更新；新 ID 必须提供 type。
+所有 id、parentId、entityId、assetId 必须匹配 /^[a-zA-Z0-9_:.-]{1,200}$/：只用 ASCII 字母、数字和 _ : . -，不允许中文、空格或斜杠。中文显示名称请放 name，例如 {id:"sidewalk-left",type:"group",name:"左侧人行道"}。
+objects 的 type 只能是 group、mesh、camera、light、asset；禁止 kind 字段或 timeline 伪对象，时间轴应放在 SPEC 顶层 timeline。
+提交前收集所有对象 ID，一次检查每个 parentId；声明常量不等于创建组，必须显式添加 {id:"city-blocks",type:"group"} 等父组。父组可以在子节点之后声明。
+不要猜测已有节点 ID，应读取 ctx.scene。parentId 引用其他实体 ID；null 为根层级，禁止循环父子关系。
+rotation 为 XYZW 四元数，不是欧拉角。绕 Y 轴旋转 yaw 弧度可用 [0,Math.sin(yaw/2),0,Math.cos(yaw/2)]。
+几何体类型与 args 参数顺序：
+ box：[宽,高,深]；plane：[宽,高]；sphere：[半径,水平分段,垂直分段]；
+ cylinder：[顶半径,底半径,高,径向分段]；cone：[半径,高,径向分段]；
+ torus：[主半径,管半径,径向分段,环向分段]；capsule：[半径,直段长度,端盖分段,径向分段]。
+ 自定义网格使用 geometry:{type:"buffer",positions:[x,y,z,...],indices:[0,1,2,...]}。
+将多个有名称的部件组合成细致模型；重复的枕木、金币、窗户、柱子可用循环创建。
+节点类型：
+ group：可移动组合体的父节点；对组做动画可带动所有部件。
+ mesh：创建时必须提供 geometry；material 还可包含 baseColor:[r,g,b,a]、emissive:"#rrggbb"。
+ camera：camera:{fov:50,near:0.05,far:1000,aspect:1.77777778}；lookAt:[x,y,z] 设置静态朝向。
+ light：light:{type:"directional"|"point"|"spot",color:[1,1,1],intensity:3,castShadow:true,range:0,outerConeAngle:1,innerConeAngle:0}。
+ asset：assetId 引用 ctx.assets 中 kind 为 glb 的素材，以组形式导入并保留原几何体和材质。
 
-All optional node fields omitted during a patch retain existing values.
-An existing id identifies an update. A new id requires type. Do not invent ids of existing nodes; read ctx.scene.
-parentId references another id; null means root. No cyclic parenting.
-rotation is XYZW quaternion, not Euler angles. Use [0,Math.sin(yaw/2),0,Math.cos(yaw/2)] for yaw.
-geometry types and args:
- box [width,height,depth]; plane [width,height]; sphere [radius,widthSegments,heightSegments];
- cylinder [radiusTop,radiusBottom,height,radialSegments]; cone [radius,height,radialSegments];
- torus [radius,tube,radialSegments,tubularSegments]; capsule [radius,length,capSegments,radialSegments];
- buffer {type:"buffer",positions:[x,y,z,...],indices:[0,1,2,...]} for arbitrary procedural meshes.
-Create detailed models by grouping many named parts. Use loops for repeated sleepers, coins, windows, pillars.
-Node types:
- group: parent for movable assemblies; animate this group to move all its parts.
- mesh: requires geometry on creation. material may also have baseColor:[r,g,b,a], emissive:"#rrggbb".
- camera: camera:{fov:50,near:0.05,far:1000,aspect:1.77777778}; lookAt:[x,y,z] sets static orientation.
- light: light:{type:"directional"|"point"|"spot",color:[1,1,1],intensity:3,castShadow:true,range:0,outerConeAngle:1,innerConeAngle:0}.
- asset: assetId from ctx.assets of kind glb, imports that GLB as a group, preserving its geometry/materials.
-
-Animations are baked samples, editable and included in GLB:
-{id:"run-motion",name:"Runner movement",duration:15,tracks:[
- {entityId:"runner",property:"position",times:[0,1,2],values:[0,0,0, 0,0,-5, 2,0,-10]},
- {entityId:"runner",property:"quaternion",times:[0,1],values:[0,0,0,1, 0,0,0,1]}
+动画为可编辑的烘焙采样，随 GLB 导出：
+{id:"run-motion",name:"角色移动",duration:15,tracks:[
+ {entityId:"runner",property:"position",times:[0,1,2],values:[0,0,0,0,0,-5,2,0,-10]},
+ {entityId:"runner",property:"quaternion",times:[0,1],values:[0,0,0,1,0,0,0,1]}
 ]}
-property is position/quaternion/scale. times increase strictly and fit duration.
-Values are flat arrays (3 or 4 numbers per time). Reuse animation name to replace an existing animation.
-Bake smooth runner limb animation, jump/slide and camera tracking at 24fps with loops, not just endpoints.
-Camera quaternion can be derived with your own look-at quaternion helper using vector math.
-Camera looks along local -Z, Y is up, right-handed world.
-
+property 可为 position/quaternion/scale；times 必须严格递增且不超过 duration。
+values 为扁平数组，每个时间点对应 3 或 4 个数值。同名动画会替换已有动画。
+角色肢体、跳跃、滑行可用循环按 24fps 烘焙平滑动作，不能只有起终点；相机运动使用下述统一 cameraMotion 路径接口，由共享运行时采样。
+可用向量数学编写朝向辅助函数，计算相机四元数。相机朝本地 -Z，Y 向上，世界为右手坐标系。
 world:{type:"solid",color:[0.22,0.24,0.27],strength:2}
 timeline:{version:1,duration:15,shots:[{cameraId:"camera-id",start:0,end:15}]}
-Set camera aspect and timeline for all new scenes. At least one named camera and sufficient lighting.
-For patching a selected clip, use reference.entityId/cameraId and start/end, preserve unrelated nodes and shots.
+新场景必须设置相机画幅和时间轴，至少一个有名称的机位，并保证足够灯光。
+局部修改所选片段时使用 reference.entityId/cameraId 和 start/end，保留无关对象和镜头。
 
-operations accepts validated libtv collaboration operations (entityId,kind,payload):
+operations 接受通过校验的协作操作，字段为 entityId、kind、payload：
 entity.transform.set/object.transform.set/camera.transform.set:{transform:{position:[x,y,z],rotation:[x,y,z,w],scale:[x,y,z]}}
 entity.rename/object.rename:{name}; entity.delete/object.delete:{}
 camera.projection.set:{projection:{type:"perspective",verticalFov:radians,near,far}}
@@ -89,17 +105,61 @@ timeline.shots.set:{timeline:{version:1,duration,shots:[{cameraId,start,end}]}}
 object.material.set:{material:{baseColor:[r,g,b,a],metallic,roughness}}
 light.properties.set:{properties:{type:"directional"|"point"|"spot",color:[r,g,b],intensity,castShadow}}
 camera.rig.set:{rig:{aspect:number|null,dofFocusName:string|null,path:null,animation:{name,duration,times,positions,quaternions}}}
-For editable camera paths, path may instead be {id,name,transform,settings,waypoints:[{id,name,transform}],anchor:null,aim:null,focus:null,focusParent:"path"}; animation may be null.
+可编辑相机路径的 path 也可为 {id,name,transform,settings,waypoints:[{id,name,transform}],anchor:null,aim:null,focus:null,focusParent:"path"}；animation 可为 null。rig.paths 可保存该机位的全部路径（元素结构与 path 相同），activePathId 指定当前编辑段；直接关键帧控制时 path:null、paths:[]。
 
-BUILD AND PREVIEW:
-build_3D_scene({source:"/scene.js"}) -- source is optional. Executes build(ctx), validates the spec,
- applies it to the current GLB/JSON baseline, and exports immutable local GLB/JSON artifacts.
- Returns {status:"completed",task_id,source,source_hash,source_sha256,glb_url,collaboration_url,glb_size,glb_sha256,triangles}.
-preview_3D_scene({camera_id,time:0}) -- camera_id is an optional stable camera id (defaults to first camera).
- time is in seconds and must fit the timeline. Restores the latest successful build and renders its actual animation.
- Returns {status:"completed",task_id,camera_id,time,width,height,image_url} plus image pixels for the next model call.
+构建与检查：
+通用灯光（与摄像机一样：底层灯型、参数化预设、自定义共用实现）：
+lighting:[{id:"lighting-main",presetId:"side-shaping",subjectIds:["subject-id"],reference:{space:"camera",cameraId:"camera-id",follow:false},intensity:1,contrast:0.65,softness:0.8,temperature:4800,shadows:"soft"}]
+预设目录（实时生成）：
+{{LIGHTING_PRESETS}}
+每组稳定 id；重复构建只更新对应组，保留其他组和已有灯光。locked:true 的组或包含锁定灯光的组不可覆盖。enabled:false 禁用整组。不要用固定示例 ID。
+预设需要 subjectIds 或 origin:[x,y,z]。根据主体包围盒计算中心和尺寸，scale 可显式设置灯位距离尺度。reference.space 为 world/subject/camera；主体参考 entityId 默认 subjectIds[0]，机位参考必须有 cameraId。follow:false 在构建时取参考方向；follow:true 明确绑定参考实体的位置与方向，并随动画更新。
+practical 预设额外需要 sourceIds:[场景内光源实体ID]，实际灯位绑定这些实体；不根据名字猜测窗户或灯具。
+自定义：
+lighting:[{id:"lighting-main",presetId:"custom",origin:[0,0,0],lights:[{id:"key",role:"key",position:[-3,4,3],target:{entityId:"subject-id",follow:true},properties:{type:"area",color:"#fff1dc",intensity:6,width:3,height:2,castShadow:false}},{id:"ambient",role:"ambient",properties:{type:"hemisphere",color:"#c9ddff",groundColor:"#69513e",intensity:0.3}}]}]
+自定义 light.properties.type 支持 directional/point/spot/area/hemisphere/ambient；color/groundColor 为 #rrggbb。intensity 是该灯型的原生强度，不跨灯型直接比较；组 intensity/contrast/softness/temperature 只用于预设生成，自定义按逐灯 properties 精确控制。
+position、rotation:[x,y,z,w]、target.point 均为布光组局部坐标，单位沿用场景；组 origin 和 rotation 是世界坐标/世界四元数，默认原点及参考实体方向。自定义 position 不自动按主体尺寸缩放。
+target 只用于有方向的灯，须且只能提供 entityId 或 point；follow:true 持续注视，false 只在构建时定向。sourceEntityId 将灯位绑定场景实体。role 支持 key/fill/separation/ambient/practical/bounce/background。enabled 控制单灯可见；locked 防止组覆盖。
+properties 可选 range（0 无限）、decay（默认2）、angle（聚光半角，度，0<angle<90）、penumbra（光锥边缘0..1）、width/height（面积光尺寸），castShadow，shadow:{mapSize:512|1024|2048|4096,bias,normalBias,radius}。
+面积光/半球光/环境光不支持投影；soft 是阴影过滤策略，不代表物理面积光软阴影。发光材质不会自动照亮周围。不要声称具有全局光照、体积光或面积光投影。
+每灯可用 keyframes:[{time:0,intensity:1,color:"#ffffff",position:[0,2,0]},{time:3,intensity:2,color:"#ffbb88",position:[1,2,0]}]；时间严格递增，按属性独立线性插值，首尾保持。sourceEntityId 优先于 position 关键帧；target.follow 决定动态朝向。关键帧时间不得超过显式时间轴。
+运行时可把预设展开为当前实际灯光并转为 custom；前端不显示专门的灯光设置面板，布光通过 Agent 提交；手动编辑逐灯参数/变换后保留当前效果并转换为自定义。灯型、绑定、关键帧、锁定和布光组配置同时保存在项目 JSON 和 GLB extras，本项目导入可完整恢复；第三方 GLB 查看器可能忽略非标准灯型。
+旧版 lighting:{preset:"product",...} 仅兼容已有程序，新场景使用 lighting 数组。
+材质：玻璃使用 transmission/thickness/ior，金属使用 metallic/roughness，局部编辑保留未指定属性。
+world 额外支持 exposure:1、toneMapping:"aces"|"none"、environment:{preset:"studio"|"solid",strength:0.8,color:[1,1,1]}。
+背景 color 与显式 environment 独立；environment.color 仅用于 solid。未指定 environment 时保留旧环境行为。
+material 额外支持 transmission:0..1、thickness:0..100、ior:1..2.333、clearcoat:0..1、clearcoatRoughness:0..1、attenuationColor:"#ffffff"、attenuationDistance:正数。
+玻璃示例：{color:"#ffffff",roughness:0.08,transmission:1,thickness:0.15,ior:1.5}。透射玻璃一般保持不透明混合，即 baseColor 的 alpha 为 1。
+未提交的材质属性保留原值；物理材质随 GLB 保存。场景环境和曝光同时保存在协作 JSON 和 GLB 自定义元数据，外部查看器需自行设置环境与曝光。
 
-Workflow: x_list/x_read/x_grep context/source → x_write/x_edit → build_3D_scene → preview_3D_scene at start/key actions/end → fix/rebuild/preview if needed → concise Chinese delivery.
-The frontend keeps its existing tool status display, staging validation, scene/timeline update, and local GLB/JSON autosave/recovery; no new UI entry is needed.
-Build failures return status:error with an actionable message. Never claim completion after a failed build.
-preview returns actual PNG pixels to the model; inspect them before saying the scene is checked.
+统一相机路径（与编辑器使用同一生成、插值、注视和烘焙器）：
+预设目录由公共模块生成，编辑器六张卡片只是常用入口；以下均可作为 presetId：
+{{CAMERA_PATH_PRESETS}}
+
+cameraMotion 为路径片段数组。每段字段：
+{id,cameraId,presetId,subjectIds:[],start,end,origin?,aim?,path?,follow?,easing?,intensity?,framing?,speed?,bounce?,roll?,margin?}
+使用真实场景的稳定实体 ID、实际比例和用户要求的时长，不依赖商品类型、名称或示例固定坐标。
+id 为唯一英文/数字/下划线/连字符标识；start/end 是绝对秒数，0..600，每段至少 0.1 秒。
+预设需提供 subjectIds 或显式 origin。subjectIds 为实际取景主体，按包围球、FOV、画幅及 margin（默认 1.15）计算初始距离；origin 可显式指定世界起点来控制预设锚点。它不是每种预设的实际首点，预设会围绕锚点生成路径。
+framing 可为 close/medium/wide（默认 medium）；intensity 为 0.25..2，控制相对锚点的移动幅度。
+presetId:"custom" 允许 Agent 自行计算 path:{points:[[x,y,z],...],curve:"centripetal"|"chordal"|"catmullrom",tension:0..1,closed:false}。
+path.points 为 2..128 个世界坐标控制点，可用数学、循环和场景尺寸构建任意路径；不是逐帧姿态。自定义路径必须有 path，内置预设不能混用自定义点。默认向心 Catmull-Rom，tension 只影响 catmullrom。
+aim:{mode:"target"|"tangent"|"fixed",entityId?,point?,offset?}。entityId 和 point 互斥；target 逐帧注视实体或世界点，offset 是世界偏移；tangent 看向运动切线；fixed 保持初始世界朝向。省略时使用预设默认，自定义路径默认 tangent，follow 默认注视跟随主体。垂直路径建议显式指定注视目标。
+follow:{entityId,positionSpace:"world"|"subject",offset:[0,0,0]} 是动态跟拍，可与任意预设或自定义路径组合。world 跟随主体的世界平移；subject 同时跟随主体坐标系的平移、旋转、缩放。offset 使用对应坐标系。运行时逐帧采样已有主体/父节点动画，而非只读取初始位置。
+easing:"linear"|"in"|"out"|"inout"；speed:-10..10，负值反向，0 停留，bounce:true 往返；roll 为角度。start/end 定义最终播放时段，运行时换算编辑器内部时长；编辑器改变速度或往返时会更新片段长度。
+位置、方向以 30fps 统一烘焙并转为当帧相机父节点局部坐标（父节点须正数等比缩放，非等比缩放应放在模型子节点），路径控制点、锚点、曲线、跟随与注视定义随 GLB/本地工程保留，可继续编辑和撤销。超过 2000 个间隔的单段会均匀降低采样密度。
+同一机位多段不得重叠，接点位置和方向必须连续；运行时不自动猜测连接线。可用 custom 点精确连接预设端点；不连续取景应使用独立机位和镜头切换。空隙期间停留前段世界姿态，首段延迟时停留首姿态。
+每次修改某机位的 cameraMotion 应提交其完整路径序列。未提交的其他机位路径保留；主体动画更新后动态跟拍重新烘焙。同一批次禁止 animations 与 cameraMotion 重复控制同一机位位置/四元数。单独提交直接机位关键帧会移除该机位旧路径控制。
+构建 diagnostics 中 inside-subject-bounds 表示进入主体包围范围，subject-outside-frame 表示主体包围盒超出画幅（不是精确碰撞检测）。有警告需按真实预览检查，自动构图不保证整段通过视觉验收。旧 type 运动协议已移除，不能使用。
+
+build_3D_scene({source:"/scene.js"})：source 可选。执行 build(ctx)，校验规格，应用到当前 GLB/JSON 基线，并导出不可变的本地产物。
+ 返回 {status:"completed",task_id,source,source_hash,source_sha256,glb_url,collaboration_url,glb_size,glb_sha256,triangles,diagnostics}。
+preview_3D_scene({check:"missing"})：验收首选。服务端按当前时间轴生成每镜头的精确起点、中点、终点，每次最多检查 12 帧；重复调用到 remaining 为空。禁止自行用 0.1/1.9 等邻近时间替代端点。新构建会使旧版本的检查失效。
+ 工具自动拆成小批次，逐帧保存和推送 PREVIEW；超时保留已完成帧，只重试尚缺帧。partial 返回已完成图片、remaining 和 unrendered，继续检查即可，不要因预览超时重新构建。已保存图片复用缓存，只有真实图片提供给模型后才计入最终验收。
+preview_3D_scene({camera_id,time:0})：额外排查单帧；camera_id 为可选的稳定机位 ID，省略时使用首个机位。也可用 frames 数组指定最多 12 帧，与 check 或单帧参数互斥。
+ time 单位为秒，不能超过时间轴。恢复最新成功构建并渲染真实动画。
+ 返回 {status:"completed",task_id,camera_id,time,width,height,image_url}，并将实际图片像素传给下一次模型调用。
+流程：x_list/x_read/x_grep 检查上下文和源程序 → 必要时 x_copy 备份 → x_write/x_edit → build_3D_scene → 检查起点、关键动作、结尾 → 必要时修复并重建检查 → 中文简短交付。
+前端复用现有工具状态、产物校验、场景和时间轴更新、GLB/JSON 自动保存与恢复，无需新入口。
+构建失败返回 status:error 及可处理的错误说明；构建失败时不能宣称已完成。
+预览返回真实 PNG 像素，必须实际检查后才能声称已检查画面。

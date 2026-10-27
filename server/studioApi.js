@@ -1,3 +1,4 @@
+import {allowedOrigin} from './serviceUrls.js';
 import express from 'express';
 import multer from 'multer';
 import fs from 'node:fs/promises';
@@ -18,6 +19,12 @@ export function mountStudioApi(app,{database,dataDir=DATA,onStop=()=>{},isRunnin
  const store=database||new StudioDatabase(),sql=store.db,filesDir=path.join(dataDir,'studio-files');
  const ok=(res,data={})=>res.json({code:0,msg:'',data});
  const route=(method,url,fn)=>app[method](url,async(req,res,next)=>{try{await fn(req,res);}catch(e){next(e);}});
+ route('get','/api/studio/data-generation',async(req,res)=>{
+  let generation=null;
+  try{generation=JSON.parse(await fs.readFile(path.join(dataDir,'data-generation.json'),'utf8')).generation;}
+  catch(error){if(error.code!=='ENOENT')throw error;}
+  res.set('Cache-Control','no-store');ok(res,{generation});
+ });
  const json=express.json({limit:'23mb'});app.use('/api',json);app.use('/gateway',json);
  const multipart=multer({storage:multer.memoryStorage(),limits:{fileSize:MAX_GLB,files:2,fields:5,fieldSize:22*1024*1024}});
  const localUrl=id=>`${BASE}/local-assets/${id}`;
@@ -70,7 +77,7 @@ export function mountStudioApi(app,{database,dataDir=DATA,onStop=()=>{},isRunnin
  app.put('/local-upload/:id/part/:part',express.raw({type:()=>true,limit:'5mb'}),async(req,res,next)=>{try{const row=ticket(req.params.id),part=integer(req.params.part,1,row.parts),expected=part===row.parts?row.size-(part-1)*row.part_size:row.part_size;if(req.body.length!==expected)throw Error('分片大小错误');await atomicWrite(path.join(filesDir,row.id,'parts',String(part)),req.body);res.sendStatus(200);}catch(e){next(e);}});
  route('post','/gateway/oss-server-api/oss-service/api/oss/pre-sign/multipart/complete/4',async(req,res)=>{const row=ticket(req.body.uploadId);if(row.path!==req.body.path||!row.size)throw Error('无效的分片会话');const bytes=Buffer.concat(await Promise.all(Array.from({length:row.parts},(_,i)=>fs.readFile(path.join(filesDir,row.id,'parts',String(i+1))))));if(bytes.length!==row.size)throw Error('分片大小不匹配');const result=await registerAsset(row.id,bytes,path.basename(req.body.fileName||row.path),row.mime);sql.prepare('UPDATE upload_tickets SET completed=1 WHERE id=?').run(row.id);ok(res,{path:row.path,cdnUrl:result.url,assetId:row.id});});
  route('get','/local-assets/:id',(req,res)=>{const row=asset(req.params.id);res.type(row.mime).set({'X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; sandbox"});res.sendFile(row.path,{dotfiles:'allow'});});
- route('post','/api/community/image/verify',async(req,res)=>{if(!Array.isArray(req.body.urlList)||req.body.urlList.length>12)throw Error('无效的图片列表');const list=[];for(const url of req.body.urlList){const parsed=new URL(url);if(parsed.origin!==BASE||!/^\/local-assets\/[\w-]+$/.test(parsed.pathname))throw Error('仅支持本地图片');const row=asset(parsed.pathname.split('/').at(-1));if(row.kind!=='image')throw Error('不是图片');list.push({url,result:false,validation:'local-file-only'});}ok(res,{list});});
+ route('post','/api/community/image/verify',async(req,res)=>{if(!Array.isArray(req.body.urlList)||req.body.urlList.length>12)throw Error('无效的图片列表');const list=[];for(const url of req.body.urlList){const parsed=new URL(url);if(!allowedOrigin(parsed.origin,req)||!/^\/local-assets\/[\w-]+$/.test(parsed.pathname))throw Error('仅支持本地图片');const row=asset(parsed.pathname.split('/').at(-1));if(row.kind!=='image')throw Error('不是图片');list.push({url,result:false,validation:'local-file-only'});}ok(res,{list});});
  const history=(req,res)=>{const page=integer(req.body.page??req.body.pageNo??1,1,100000),pageSize=integer(req.body.pageSize??15,1,100),rows=sql.prepare("SELECT * FROM assets WHERE kind='image' AND source!='cover' ORDER BY created_at DESC LIMIT ? OFFSET ?").all(pageSize,(page-1)*pageSize);ok(res,{list:rows.map(r=>({artifactId:r.id,id:r.id,fileName:r.name,mediaType:'image',previewPath:localUrl(r.id),imageUrl:localUrl(r.id)})),total:sql.prepare("SELECT count(*) AS total FROM assets WHERE kind='image' AND source!='cover'").get().total});};
  route('post','/api/task/artifact/list',history);
  for(const suffix of ['editor/img/history','image/history','comfy/img/history','sd3/image/history','team/images'])route('post',`/gateway/sd-api/generate/${suffix}`,history);

@@ -67,13 +67,15 @@ export function createLocalAutosave(viewport, onStatus, options={}) {
     operations = [],
     timer,
     running,
-    stopped = false;
+    stopped = false,
+    pauses = 0,
+    suspended;
   let writeQueue = Promise.resolve();
   const report = (state, error) =>
     onStatus?.({ state, revision, savedRevision, error });
   const schedule = () => {
     clearTimeout(timer);
-    if (!stopped && revision > savedRevision)
+    if (!stopped && !pauses && !suspended && revision > savedRevision)
       timer = setTimeout(() => flush().catch(() => {}), 2000);
   };
   const queue = (task) => {
@@ -114,6 +116,8 @@ export function createLocalAutosave(viewport, onStatus, options={}) {
   };
   async function flush() {
     clearTimeout(timer);
+    if (suspended) throw suspended;
+    if (pauses) return;
     if (stopped || revision <= savedRevision) return;
     if (running) {
       await running;
@@ -179,10 +183,18 @@ export function createLocalAutosave(viewport, onStatus, options={}) {
   return {
     changed,
     flush,
+    async pause(){
+      pauses++;clearTimeout(timer);
+      if(running)await running.catch(()=>{});
+      await writeQueue.catch(()=>{});
+      let released=false;
+      return ()=>{if(released)return;released=true;pauses--;schedule();};
+    },
+    suspendWrites(error){suspended=error;clearTimeout(timer);report('error',error.message);},
     async adoptSnapshot(snapshot){
       clearTimeout(timer);if(running)await running.catch(()=>{});if(stopped)throw Error('本地保存已关闭。');
       await queue(()=>transact(['snapshots','journal'],'readwrite',tx=>{tx.objectStore('snapshots').put({...snapshot,id:KEY,savedAtMs:Date.now(),glbName:'studio.glb',jsonName:'studio-collaboration.json'});tx.objectStore('journal').delete(KEY);}));
-      revision=savedRevision=snapshot.revision;operations=[];localStorage.removeItem(MIRROR);report('saved');
+      revision=savedRevision=snapshot.revision;operations=[];suspended=undefined;try{localStorage.removeItem(MIRROR);}catch{/* Optional crash mirror. */}report('saved');
     },
     async replaceSnapshot(snapshot) {
       await flush();
@@ -195,7 +207,7 @@ export function createLocalAutosave(viewport, onStatus, options={}) {
       }));
       revision = savedRevision = next;
       operations = [];
-      localStorage.removeItem(MIRROR);
+      try{localStorage.removeItem(MIRROR);}catch{/* Optional crash mirror. */}
       report('saved');
     },
     initialize(

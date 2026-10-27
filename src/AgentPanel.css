@@ -146,3 +146,7 @@
 .agent-durationPopup .studio-auto{margin:6px 10px;}
 .agent-settingsError{font-size:12px;color:#ff9696;}
 .agent-composer[data-compact=true] .agent-richInput .agent-selectionTagRemove{display:none;}
+.agent-toolError{margin:6px 0 0 22px;color:#edaaa1;font-size:12px;overflow-wrap:anywhere;}
+.agent-toolError summary{cursor:pointer;}
+.agent-toolError pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;max-height:240px;overflow:auto;}
+.agent-toolError p{margin:6px 0;}

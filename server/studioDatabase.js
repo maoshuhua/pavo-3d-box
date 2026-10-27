@@ -42,14 +42,35 @@ export class StudioDatabase {
  createSession(body){if(body.sessionId){const row=this.db.prepare('SELECT * FROM sessions WHERE id=?').get(body.sessionId);if(row){if(row.project_id!==body.projectId)throw Error('会话不属于当前项目');return row.id;}}
   const id=body.sessionId||crypto.randomUUID();this.db.prepare('INSERT INTO sessions VALUES(?,?,?,?,?,?,?)').run(id,body.projectId,body.name||'libtv_coding_agent',body.agentName||'libtv_coding_agent',body.nodeKey||'animation-preview',JSON.stringify(body.libtvMeta||{}),Date.now());return id;}
  addMessage(sessionId,message){this.db.prepare('INSERT INTO messages(id,session_id,role,body) VALUES(?,?,?,?) ON CONFLICT(id,session_id) DO UPDATE SET body=excluded.body').run(message.id,sessionId,message.role,JSON.stringify(message));}
- recordEvent(sessionId,runId,event){return this.transaction(()=>{const inserted=this.db.prepare('INSERT INTO events(run_id,session_id,body) VALUES(?,?,?)').run(runId,sessionId,JSON.stringify(event));if(event.type==='TEXT_MESSAGE_CONTENT'){
+ recordEvent(sessionId,runId,event){return this.recordEvents(sessionId,runId,[event])[0];}
+ recordEvents(sessionId,runId,events){return this.transaction(()=>events.map(event=>this._recordEvent(sessionId,runId,event)));}
+ _recordEvent(sessionId,runId,event){const inserted=this.db.prepare('INSERT INTO events(run_id,session_id,body) VALUES(?,?,?)').run(runId,sessionId,JSON.stringify(event));if(event.type==='TEXT_MESSAGE_CONTENT'){
    const id=event.messageId||`${runId}:assistant`,row=this.db.prepare('SELECT body FROM messages WHERE id=? AND session_id=?').get(id,sessionId),message=row?JSON.parse(row.body):{id,role:'assistant',text:''};message.text+=(event.delta||'');this.addMessage(sessionId,message);
   }else if(event.type==='TOOL_CALL_START')this.addMessage(sessionId,{id:event.toolCallId,role:'tool',toolName:event.toolCallName,toolStatus:'running',text:`正在执行 ${event.toolCallName}`});
-  else if(event.type==='TOOL_CALL_END'){const row=this.db.prepare('SELECT body FROM messages WHERE id=? AND session_id=?').get(event.toolCallId,sessionId);if(row){const message=JSON.parse(row.body);message.toolStatus=event.error?'error':'completed';message.text=`${event.error?'执行失败':'已执行'} ${message.toolName}`;this.addMessage(sessionId,message);}}
+  else if(event.type==='TOOL_CALL_END'){const row=this.db.prepare('SELECT body FROM messages WHERE id=? AND session_id=?').get(event.toolCallId,sessionId);if(row){const message=JSON.parse(row.body);message.toolStatus=event.error?'error':'completed';message.text=`${event.error?'执行失败':'已执行'} ${message.toolName}`;message.toolError=event.error?String(event.error).slice(0,1200):undefined;this.addMessage(sessionId,message);}}
+  else if(event.type==='TOOL_CALL_RESULT'){
+   const row=this.db.prepare('SELECT body FROM messages WHERE id=? AND session_id=?').get(event.toolCallId,sessionId);
+   if(row){let result;try{result=JSON.parse(event.content);}catch{}
+    if(result?.status==='error'){const message=JSON.parse(row.body);message.toolStatus='error';message.text=`执行失败 ${message.toolName}`;message.toolError=String(result.error||event.error||'工具执行失败').slice(0,1200);message.toolErrorDetails={groups:result.groups?.slice(0,10),logId:result.logId,stage:result.stage,diagnostics:result.diagnostics?.slice(0,12),repeat:result.repeat};this.addMessage(sessionId,message);}
+   }
+  }
+  else if(event.type==='RUN_FINISHED'&&['partial','cancelled'].includes(event.status)){
+   const text=event.message||(event.status==='cancelled'?'已取消，已保留最近成功的场景和预览。':['本轮部分完成。',...(event.outcome?.issues||[]).map(issue=>issue.message).filter(Boolean)].join('\n'));
+   this.addMessage(sessionId,{id:`${runId}:outcome`,role:'assistant',text});
+   if(event.status==='cancelled')for(const row of this.db.prepare("SELECT body FROM messages WHERE session_id=? AND role='tool'").all(sessionId)){const message=JSON.parse(row.body);if(message.toolStatus==='running'){message.toolStatus='cancelled';message.text=`已取消 ${message.toolName}`;this.addMessage(sessionId,message);}}
+  }
   else if(event.type==='RUN_ERROR'){for(const row of this.db.prepare("SELECT body FROM messages WHERE session_id=? AND role='tool'").all(sessionId)){const message=JSON.parse(row.body);if(message.toolStatus==='running'){message.toolStatus='interrupted';message.text=`执行已中断 ${message.toolName}`;this.addMessage(sessionId,message);}}}
-  return Number(inserted.lastInsertRowid);});
+  return Number(inserted.lastInsertRowid);
  }
- runDetail(projectId,runId){const row=this.db.prepare('SELECT * FROM runs WHERE id=? AND project_id=?').get(runId,projectId);if(!row)throw Object.assign(Error('任务不存在或不属于当前项目'),{status:404});const last=this.db.prepare('SELECT body FROM events WHERE run_id=? AND json_extract(body,\'$.type\')=\'RESULT\' ORDER BY seq DESC LIMIT 1').get(runId),failure=this.db.prepare('SELECT body FROM events WHERE run_id=? AND json_extract(body,\'$.type\')=\'RUN_ERROR\' ORDER BY seq DESC LIMIT 1').get(runId),value=last?JSON.parse(last.body):null;return {runId:row.id,sessionId:row.session_id,status:row.status,eventSeq:this.db.prepare('SELECT max(seq) AS seq FROM events WHERE run_id=?').get(runId).seq||0,result:value?.result||null,snapshotRevision:value?.snapshotRevision??null,error:failure?JSON.parse(failure.body).message:null};}
+ runDetail(projectId,runId){
+  const row=this.db.prepare('SELECT * FROM runs WHERE id=? AND project_id=?').get(runId,projectId);
+  if(!row)throw Object.assign(Error('任务不存在或不属于当前项目'),{status:404});
+  const last=this.db.prepare('SELECT body FROM events WHERE run_id=? AND json_extract(body,\'$.type\')=\'RESULT\' ORDER BY seq DESC LIMIT 1').get(runId);
+  const terminal=this.db.prepare('SELECT body FROM events WHERE run_id=? AND json_extract(body,\'$.type\') IN (\'RUN_ERROR\',\'RUN_FINISHED\') ORDER BY seq DESC LIMIT 1').get(runId);
+  const value=last?JSON.parse(last.body):null,finished=terminal?JSON.parse(terminal.body):null;
+  const legacyCancelled=finished?.type==='RUN_ERROR'&&finished.message==='Cancelled by user';
+  return {runId:row.id,sessionId:row.session_id,status:legacyCancelled?'cancelled':row.status,eventSeq:this.db.prepare('SELECT max(seq) AS seq FROM events WHERE run_id=?').get(runId).seq||0,result:value?.result||null,snapshotRevision:value?.snapshotRevision??null,error:finished?.type==='RUN_ERROR'&&!legacyCancelled?finished.message:null,...finished?.outcome?{outcome:finished.outcome}:{},...finished?.metrics?{metrics:finished.metrics}:{},...legacyCancelled?{message:'已取消，已保留最近成功的场景和预览。'}:finished?.type==='RUN_FINISHED'&&finished.message?{message:finished.message}:{}};
+ }
  runEvents(projectId,runId,afterSeq=0){this.runDetail(projectId,runId);return this.db.prepare('SELECT seq,body FROM events WHERE run_id=? AND seq>? ORDER BY seq').all(runId,afterSeq).map(row=>({...JSON.parse(row.body),seq:row.seq}));}
  history(projectId,sessionId,afterSeq=0){if(sessionId){const row=this.db.prepare('SELECT * FROM sessions WHERE id=?').get(sessionId);if(!row||row.project_id!==projectId)throw Error('会话不属于当前项目');}const rows=this.db.prepare('SELECT m.* FROM messages m JOIN sessions s ON s.id=m.session_id WHERE s.project_id=? AND (? IS NULL OR s.id=?) AND m.seq>? ORDER BY m.seq').all(projectId,sessionId||null,sessionId||null,Number(afterSeq)||0);const run=this.db.prepare('SELECT id FROM runs WHERE project_id=? AND (? IS NULL OR session_id=?) ORDER BY created_at DESC,rowid DESC LIMIT 1').get(projectId,sessionId||null,sessionId||null),latestRun=run?this.runDetail(projectId,run.id):null;return {messages:rows.map(row=>({...JSON.parse(row.body),...JSON.parse(row.body).attachments?{attachments:JSON.parse(row.body).attachments.map(file=>({...file,name:normalizeUploadName(file.name)}))}:{},messageId:row.id,seq:row.seq})),latestSeq:rows.at(-1)?.seq||0,runStatus:latestRun?.status||'idle',latestRun};}
 }

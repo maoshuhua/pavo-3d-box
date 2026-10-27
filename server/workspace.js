@@ -1,10 +1,9 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import {atomicWrite,sourcePath,sha256} from './storage.js';
+import {WORKSPACE_FILE as FILE,WORKSPACE_DIRECTORY as DIRECTORY,WORKSPACE_DEVICE as DEVICE,parseWorkspacePath} from './workspacePaths.js';
 
-const FILE = /^[a-zA-Z0-9_-]+\.(js|json|txt|md)$/;
-const DIRECTORY = /^[a-zA-Z0-9_-]+$/;
-const DEVICE = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/i;
 const READ_LIMIT = 32 * 1024 * 1024;
 const OUTPUT_LIMIT = 64000;
 const SCAN_LIMIT = 10000;
@@ -12,11 +11,7 @@ const SCAN_LIMIT = 10000;
 // All paths are virtual and relative to this project's workspace. Inspect each
 // existing component: a local junction/symlink must not turn listing into host access.
 export async function workspaceTarget(dir,virtualPath,{directory=false,write=false}={}) {
- if(typeof virtualPath!=='string'||!virtualPath.startsWith('/')||virtualPath.includes('\\'))throw Error('Invalid virtual workspace path');
- const normalized=directory&&virtualPath!=='/'?virtualPath.replace(/\/$/,''):virtualPath;
- const parts=normalized==='/'?[]:normalized.slice(1).split('/');
- if(parts.some((part,i)=>DEVICE.test(part)||!(directory||i<parts.length-1?DIRECTORY:FILE).test(part)))throw Error('Only virtual .js/.json/.txt/.md workspace paths and directories are allowed');
- if(!directory&&!parts.length)throw Error('A workspace file path is required');
+ const {path:normalized,parts}=parseWorkspacePath(virtualPath,{directory});
  if(write&&['/context.json','/scene-api.txt'].includes(normalized.toLowerCase()))throw Error('Context and scene API files are read-only');
  const root=path.resolve(dir,'workspace');
  const file=directory?path.resolve(root,...parts):sourcePath(dir,normalized);
@@ -121,6 +116,27 @@ export async function writeWorkspace(dir,{path:virtualPath,content,overwrite=fal
  if(exists&&!overwrite)throw Error('File exists; use x_edit or explicitly set overwrite=true');
  await atomicWrite(target.file,content);
  return {status:'completed',path:target.path,bytes:Buffer.byteLength(content),sha256:sha256(content)};
+}
+
+export async function copyWorkspace(dir,{source,destination,overwrite=false},signal) {
+ signal?.throwIfAborted();
+ const from=await workspaceTarget(dir,source),to=await workspaceTarget(dir,destination,{write:true});
+ if(from.file.toLowerCase()===to.file.toLowerCase())throw Error('Source and destination must differ');
+ const stat=await fs.stat(from.file);
+ if(!stat.isFile()||stat.size>1024*1024)throw Error('Copy requires a workspace file of at most 1 MiB');
+ const content=await fs.readFile(from.file);
+ if(content.length>1024*1024)throw Error('Copy source exceeds 1 MiB');
+ let exists=false;try{await fs.lstat(to.file);exists=true;}catch(error){if(error.code!=='ENOENT')throw error;}
+ if(exists&&!overwrite)throw Error('Destination exists; explicitly set overwrite=true');
+ signal?.throwIfAborted();
+ if(overwrite)await atomicWrite(to.file,content);
+ else {
+  await fs.mkdir(path.dirname(to.file),{recursive:true});
+  const temp=to.file+'.'+crypto.randomUUID()+'.tmp';
+  try {await fs.writeFile(temp,content,{flag:'wx'});signal?.throwIfAborted();await fs.link(temp,to.file);}
+  finally {await fs.rm(temp,{force:true});}
+ }
+ return {status:'completed',source:from.path,destination:to.path,bytes:content.length,sha256:sha256(content),overwritten:exists};
 }
 
 export async function editWorkspace(dir,{path:virtualPath,old_string,new_string,replace_all=false}) {

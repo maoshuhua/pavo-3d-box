@@ -1,15 +1,9 @@
+import {commonCameraMotions,cameraPathPresets} from './cameraPathPresets.js';
 import React from "react";
 import { Icon, TransformField } from "./SceneInspector.jsx";
 
 // libtv eaO/_I, eiQ/PE/Rw and eaq: same six cards, SVG paths and 2.4s motion previews.
-const motions = [
-  ["arc-right", "弧线", "围绕主体扫过", "M 8 31 Q 34 2 72 25"],
-  ["dolly-in", "推进", "聚焦主体", "M 8 31 L 72 12"],
-  ["truck-left", "横移", "横向穿过场景", "M 72 25 Q 40 14 8 25"],
-  ["crane-up", "升降", "升高并展开视野", "M 10 33 Q 30 32 70 7"],
-  ["flyover", "飞越", "从场景上方飞过", "M 8 32 Q 38 2 72 17"],
-  ["reveal-behind", "揭示", "从后方显露", "M 8 34 C 14 5 55 5 72 25"],
-];
+const motions=commonCameraMotions;
 const easings = [
   ["linear", "线性", "linear", "M8 32 L72 8"],
   ["ease", "缓动", "inout", "M8 32 C20 32 18 8 72 8"],
@@ -54,7 +48,7 @@ export function AnimationHeader({ animation, editor, disabled }) {
       >
         ×
       </button>
-      <span className="clip-time">00:00 - {clock(animation.duration)}</span>
+      <span className="clip-time">{clock(animation.start??0)} - {clock((animation.start??0)+animation.duration)}</span>
       {animation.view !== "easing" ? (
         <button
           disabled={
@@ -126,6 +120,9 @@ export function AnimationControls({ animation, details, editor, disabled }) {
   }[animation.settings.easing];
   return (
     <div className="animation-controls">
+      {animation.error&&<p role="alert">{animation.error}</p>}
+      {animation.diagnostics?.length>0&&<p role="status">路径检查：{animation.diagnostics.some(d=>d.kind==='inside-subject-bounds')?'部分时刻进入主体包围范围，请检查穿模。':'部分时刻主体超出画幅，请检查构图。'}</p>}
+      {animation.segments?.length>1&&<label className="animation-lookat"><span>路径片段</span><select aria-label="路径片段" value={animation.pathId} disabled={disabled} onChange={e=>editor?.openCameraAnimation(e.target.value)}>{animation.segments.map(s=><option key={s.id} value={s.id}>{clock(s.start)} · {s.label}</option>)}</select></label>}
       {animation.view !== "easing" ? (
         <>
           <div className="animation-clip-controls">
@@ -139,7 +136,7 @@ export function AnimationControls({ animation, details, editor, disabled }) {
               disabled={disabled}
               onChange={(value) =>
                 editor?.setPathSetting({
-                  duration: value / (animation.settings.bounce ? 2 : 1),
+                  duration: value * (Math.abs(animation.settings.speed)>1e-4?Math.abs(animation.settings.speed):1) / (animation.settings.bounce ? 2 : 1),
                 })
               }
             />
@@ -158,15 +155,16 @@ export function AnimationControls({ animation, details, editor, disabled }) {
               <select
                 aria-label="看向"
                 disabled={disabled}
-                value={animation.settings.targetName ?? ""}
+                value={animation.settings.aim==='fixed'?'__fixed__':animation.settings.aim==='tangent'?'':animation.settings.targetName??''}
                 onChange={(event) =>
                   editor?.setPathSetting({
-                    targetName: event.target.value || null,
-                    aim: event.target.value ? "target" : "tangent",
+                    targetName: event.target.value==='__fixed__'?null:event.target.value||null,
+                    aim: event.target.value==='__fixed__'?'fixed':event.target.value?'target':'tangent',
                   })
                 }
               >
                 <option value="">跟随路径</option>
+                <option value="__fixed__">固定朝向</option>
                 {animation.settings.targetName &&
                   !details.objects.some(
                     (row) =>
@@ -191,6 +189,14 @@ export function AnimationControls({ animation, details, editor, disabled }) {
               </select>
             </label>
           </div>
+          <label className="animation-lookat"><span>全部预设</span><select aria-label="全部轨迹预设" value={animation.settings.presetId??''} disabled={disabled} onChange={e=>{if(e.target.value)editor?.applyMotionPreset(e.target.value);}}><option value="">自定义路径</option>{cameraPathPresets.map(p=><option key={p.id} value={p.id}>{p.label}</option>)}</select></label>
+          <label className="animation-lookat"><span>曲线</span><select aria-label="路径曲线" value={animation.settings.curve} disabled={disabled} onChange={e=>editor?.setPathSetting({curve:e.target.value})}><option value="centripetal">向心</option><option value="chordal">弦长</option><option value="catmullrom">Catmull-Rom</option></select></label>
+          <RangeField label="运动速度" value={animation.settings.speed} min={-3} max={3} step={.1} format={v=>`${Number(v.toFixed(1))}×`} disabled={disabled} onChange={v=>editor?.setPathSetting({speed:v})}/>
+          <RangeField label="运动幅度" value={animation.settings.intensity} min={.25} max={2} step={.05} format={v=>`${Number(v.toFixed(2))}×`} disabled={disabled||!animation.settings.presetId} onChange={v=>editor?.setPathSetting({intensity:v})}/>
+          <label className="animation-lookat"><span>取景</span><select aria-label="路径取景" value={animation.settings.framing} disabled={disabled||!animation.settings.presetId} onChange={e=>editor?.setPathSetting({framing:e.target.value})}><option value="close">近景</option><option value="medium">中景</option><option value="wide">远景</option></select></label>
+          <label className="animation-lookat"><span>往返</span><input type="checkbox" aria-label="路径往返" checked={animation.settings.bounce} disabled={disabled} onChange={e=>editor?.setPathSetting({bounce:e.target.checked})}/></label>
+          <label className="animation-lookat"><span>跟随主体</span><select aria-label="跟随主体" disabled={disabled} value={animation.settings.follow?.entityId??''} onChange={e=>editor?.setPathFollow(e.target.value||null)}><option value="">静态路径</option>{details.objects.filter(r=>['mesh','group','character'].includes(r.kind)).map(r=><option key={r.id} value={r.entityId??r.id}>{r.label}</option>)}</select></label>
+          {animation.settings.follow&&<label className="animation-lookat"><span>跟随坐标</span><select aria-label="跟随坐标" disabled={disabled} value={animation.settings.follow.positionSpace} onChange={e=>editor?.setPathSetting({follow:{...animation.settings.follow,positionSpace:e.target.value}})}><option value="world">世界（跟随平移）</option><option value="subject">主体（跟随平移与旋转）</option></select></label>}
           <h2 className="animation-heading">轨迹预设</h2>
           <div className="animation-presets" aria-label="轨迹预设">
             {motions.map(([id, label, title, path]) => (

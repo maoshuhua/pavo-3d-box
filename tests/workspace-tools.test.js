@@ -5,8 +5,45 @@ import os from 'node:os';
 import path from 'node:path';
 import {createSceneTools} from '../server/tools.js';
 
-const toolNames=['x_list','x_read','x_write','x_edit','x_grep','preview_3D_scene','build_3D_scene'];
+const toolNames=['x_list','x_read','x_write','x_edit','x_grep','x_copy','preview_3D_scene','build_3D_scene'];
 const result=value=>typeof value==='string'?JSON.parse(value):value;
+
+test('x_copy preserves bytes, refuses accidental overwrite and supports explicit restore',async t=>{
+ const {workspace,invoke,events}=await fixture(t);
+ const bytes=Buffer.from([0xef,0xbb,0xbf,0x61,0x0d,0x0a]);
+ await fs.writeFile(path.join(workspace,'scene.js'),bytes);
+ const copied=await invoke('x_copy',{source:'/scene.js',destination:'/versions/original.js'});
+ assert.equal(copied.status,'completed');assert.equal(copied.overwritten,false);
+ assert.equal(copied.bytes,bytes.length);assert.match(copied.sha256,/^[a-f0-9]{64}$/);
+ assert.deepEqual(await fs.readFile(path.join(workspace,'versions/original.js')),bytes);
+ await fs.writeFile(path.join(workspace,'scene.js'),'changed');
+ assert.equal((await invoke('x_copy',{source:'/scene.js',destination:'/versions/original.js'})).status,'error');
+ assert.deepEqual(await fs.readFile(path.join(workspace,'versions/original.js')),bytes);
+ assert.equal((await invoke('x_copy',{source:'/versions/original.js',destination:'/scene.js',overwrite:true})).overwritten,true);
+ assert.deepEqual(await fs.readFile(path.join(workspace,'scene.js')),bytes);
+ assert(events.some(e=>e.type==='TOOL_CALL_START'&&e.toolCallName==='x_copy'));
+});
+
+test('x_copy rejects unsafe paths, protected destinations, missing and oversized sources and cancellation',async t=>{
+ const {workspace,invoke,controller}=await fixture(t);
+ for(const args of [
+  {source:'/context.json',destination:'/context.json'},
+  {source:'/context.json',destination:'/scene-api.txt',overwrite:true},
+  {source:'/context.json',destination:'/../escape.txt'},
+  {source:'C:/secret.txt',destination:'/copy.txt'},
+  {source:'/missing.txt',destination:'/copy.txt'},
+ ])assert.equal((await invoke('x_copy',args)).status,'error');
+ await fs.writeFile(path.join(workspace,'large.txt'),Buffer.alloc(1024*1024+1));
+ assert.equal((await invoke('x_copy',{source:'/large.txt',destination:'/copy.txt'})).status,'error');
+ await assert.rejects(fs.access(path.join(workspace,'copy.txt')));
+ await fs.mkdir(path.join(workspace,'real'));
+ await fs.symlink(path.join(workspace,'real'),path.join(workspace,'link'),'junction');
+ assert.equal((await invoke('x_copy',{source:'/context.json',destination:'/link/copy.txt'})).status,'error');
+ await fs.writeFile(path.join(workspace,'real','source.txt'),'private');
+ assert.equal((await invoke('x_copy',{source:'/link/source.txt',destination:'/copy.txt'})).status,'error');
+ controller.abort(new Error('test cancelled'));
+ await assert.rejects(invoke('x_copy',{source:'/context.json',destination:'/copy.txt'}),/test cancelled/);
+});
 
 async function fixture(t){
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'3d-box-workspace-test-'));
@@ -21,7 +58,7 @@ async function fixture(t){
  return {root,dir,workspace,controller,events,tools,invoke};
 }
 
-test('workspace exposes exactly the seven scene tools and lists only the workspace',async t=>{
+test('workspace exposes exactly the eight scene tools and lists only the workspace',async t=>{
  const {dir,workspace,tools,invoke}=await fixture(t);
  assert.deepEqual(tools.map(tool=>tool.name).sort(),toolNames.toSorted());
  await fs.mkdir(path.join(workspace,'nested'));

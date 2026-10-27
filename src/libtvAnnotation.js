@@ -1,8 +1,9 @@
+import {randomUUID} from './uuid.js';
 import * as _$ from 'react';
 import * as _W from 'react/jsx-runtime';
 const IJ={small:2,medium:4,large:6};
 export const annotationColors=['#FF1212','#FFCC00','#00EA88','#0A5BFD','#FFFFFF','#808080','#000000'];
-const I8=annotationColors,I9=()=>({shapes:[],drafting:null,past:[],future:[],eraseStart:null}),I7={genRequestId:()=>crypto.randomUUID()};
+const I8=annotationColors,I9=()=>({shapes:[],drafting:null,past:[],future:[],eraseStart:null}),I7={genRequestId:()=>randomUUID()};
 const labels={previewAnnotateCanvas:'运镜轨迹画布',previewAnnotateText:'文字标注'};
 const _B={useI18n:()=>({t:key=>labels[key.split(':').pop()]||key})};
 const IX={default:new Proxy({}, {get:(_,key)=>'motion-annotate-'+key})};

@@ -55,7 +55,7 @@ export const useMonitor = function (e, t) {
               n.cameras.length === e.cameras.length &&
               n.cameras.every(
                 (t, n) =>
-                  t.id === e.cameras[n]?.id && t.name === e.cameras[n]?.name,
+                  t.id === e.cameras[n]?.id && t.name === e.cameras[n]?.name && t.aspect === e.cameras[n]?.aspect,
               )
                 ? n.cameras
                 : e.cameras,

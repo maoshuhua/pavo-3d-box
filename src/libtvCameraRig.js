@@ -1,6 +1,9 @@
+import {randomUUID} from './uuid.js';
+import {bakePathSequence,createScenePoseSampler,samplePathPose} from './cameraPathSampling.js';
+import {cameraPathPresets as RU} from './cameraPathPresets.js';
+export {cameraPathPresets} from './cameraPathPresets.js';
 import * as THREE from "three";
-// These pure functions are copied verbatim from libtv's published 0wsgf7e09dh0-.js.
-// No React/remote service code is included.
+// Shared camera rig editing and baking for the editor and Agent.
 const RK = "blockingStudioPathFor",
   RG = "blockingStudioPath",
   RZ = "blockingStudioWaypoint",
@@ -9,7 +12,6 @@ const RK = "blockingStudioPathFor",
   RY = "blockingStudioPathFocus",
   RQ = "blockingStudioDofFocus";
 const R0 = 8176895,
-  R1 = 30,
   R2 = 0.1,
   R5 = 2,
   R3 = 120,
@@ -101,7 +103,7 @@ function eoD(e) {
 function eoO(e, t) {
   var n;
   return null ==
-    (n = eoD(e).find((e) => e.userData.blockingStudioPathFor === t))
+    (n = eoD(e).filter(p=>p.userData[RK]===t).find(p=>p.userData.hf_id===e.getObjectByName(t)?.userData.selectedCameraPathId) ?? eoD(e).find((e) => e.userData.blockingStudioPathFor === t))
     ? null
     : n;
 }
@@ -158,6 +160,7 @@ function eoW(e) {
     r = "object" == typeof n && n ? n : {},
     i = R6;
   return {
+    ...r,
     enabled: "boolean" == typeof r.enabled ? r.enabled : i.enabled,
     curve: R7.includes(r.curve) ? r.curve : i.curve,
     tension: Number.isFinite(r.tension) ? eoE(r.tension) : i.tension,
@@ -166,7 +169,7 @@ function eoW(e) {
     targetName:
       "string" == typeof r.targetName && r.targetName ? r.targetName : null,
     duration: Number.isFinite(r.duration)
-      ? Math.max(r.duration, R2)
+      ? Math.max(r.duration, 1e-6)
       : i.duration,
     easing: R9.includes(r.easing) ? r.easing : i.easing,
     bounce: "boolean" == typeof r.bounce ? r.bounce : i.bounce,
@@ -184,31 +187,11 @@ function eo$(e, t) {
   e.userData[RG] = { ...t };
 }
 function eoB(e) {
-  let t = Math.max(e.duration, R2);
+  let t = Math.max(e.duration, 1e-6);
   return e.bounce ? 2 * t : t;
 }
 function eoH(e) {
-  return e.reduce((e, t) => Math.max(e, eoB(eoW(t.group))), 0);
-}
-function eoK(e, t, n = !0) {
-  var r;
-  let i,
-    o = Math.max(e.duration, R2),
-    a = eoB(e),
-    l = (n ? ((t % a) + a) % a : Math.min(Math.max(t, 0), a)) / o;
-  return (
-    (r = e.easing),
-    (i = eoE(e.bounce && l > 1 ? 2 - l : Math.min(l, 1))),
-    "in" === r
-      ? i * i
-      : "out" === r
-        ? 1 - (1 - i) * (1 - i)
-        : "inout" === r
-          ? i < 0.5
-            ? 2 * i * i
-            : 1 - (-2 * i + 2) ** 2 / 2
-          : i
-  );
+  return e.reduce((e, t) => Math.max(e, (eoW(t.group).start??0)+effectiveDuration(eoW(t.group))), 0);
 }
 function eoG(e, t, n) {
   let r = new e.Object3D();
@@ -267,77 +250,22 @@ function eo1(e, t, n) {
     n.tension,
   );
 }
-function eo2(e, t, n, r, i) {
-  let o = eoE(r),
-    a = t.getPointAt(o);
-  if ("fixed" === n.aim) return { position: a, quaternion: null };
-  let l =
-    "target" === n.aim && i
-      ? i.getWorldPosition(new e.Vector3())
-      : new e.Vector3().copy(a).add(t.getTangentAt(o));
-  if (1e-10 > l.distanceToSquared(a)) return { position: a, quaternion: null };
-  let s = new e.Matrix4().lookAt(a, l, new e.Vector3(0, 1, 0)),
-    u = new e.Quaternion().setFromRotationMatrix(s);
-  return (
-    0 !== n.roll &&
-      u.multiply(
-        new e.Quaternion().setFromAxisAngle(
-          new e.Vector3(0, 0, 1),
-          e.MathUtils.degToRad(n.roll),
-        ),
-      ),
-    { position: a, quaternion: u }
-  );
+function eo4(e, root, path, camera, clips=[]) {
+  const paths=eoD(root).filter(p=>p.userData[RK]===camera.name&&eoW(p).enabled);
+  const selected=paths.length?paths:[path];
+  const segments=selected.map(p=>{
+    const settings=eoW(p),curve=eo1(e,p,settings);
+    return {path:p,settings,curve,start:settings.start??0,duration:effectiveDuration(settings)};
+  }).filter(s=>s.curve);
+  return segments.length?bakePathSequence(root,camera,segments,clips):null;
 }
-function eo4(e, t, n, r) {
-  let i = eoW(n),
-    o = eo1(e, n, i);
-  if (!o || !r.name) return null;
-  let a = eoB(i),
-    l = Math.abs(i.speed) > 1e-4 ? Math.abs(i.speed) : 1,
-    s = Math.min(a / l, 600),
-    u = Math.min(2e3, Math.max(2, Math.round(s * R1) + 1)),
-    c = eoT(t, i.targetName),
-    d = r.parent,
-    p = new e.Matrix4(),
-    h = new e.Quaternion();
-  d &&
-    (d.updateWorldMatrix(!0, !1),
-    p.copy(d.matrixWorld).invert(),
-    d.getWorldQuaternion(h).invert());
-  let f = [],
-    m = [],
-    g = [],
-    v = r.quaternion.clone(),
-    y = null;
-  for (let t = 0; t < u; t += 1) {
-    let n = (t / (u - 1)) * s,
-      r = eo2(
-        e,
-        o,
-        i,
-        eoK(i, 0 === i.speed ? 0 : i.speed < 0 ? a - n * l : n * l, !1),
-        c,
-      ),
-      d = r.position.clone().applyMatrix4(p),
-      b = r.quaternion ? h.clone().multiply(r.quaternion) : v.clone();
-    (y && 0 > y.dot(b) && b.set(-b.x, -b.y, -b.z, -b.w),
-      (y = b),
-      f.push(n),
-      m.push(d.x, d.y, d.z),
-      g.push(b.x, b.y, b.z, b.w));
-  }
-  return new e.AnimationClip(eoA(r.name), s, [
-    new e.VectorKeyframeTrack(`${r.name}.position`, f, m),
-    new e.QuaternionKeyframeTrack(`${r.name}.quaternion`, f, g),
-  ]);
-}
+
 function eo6(e) {
   return {
     id: (function (e) {
       let t = e.userData.hf_id;
       if ("string" == typeof t && t) return t;
-      let n = crypto.randomUUID();
+      let n = randomUUID();
       return ((e.userData.hf_id = n), n);
     })(e),
     name: e.name,
@@ -456,9 +384,7 @@ function ear(e, t, n, r, i) {
         (f.quaternion && 4 !== f.quaternion.getValueSize())
       )
         return null;
-      let m = Math.min(
-        2e3,
-        Math.max(
+      let m = Math.max(
           2,
           null == (r = null == (i = f.position) ? void 0 : i.times.length)
             ? 0
@@ -466,7 +392,6 @@ function ear(e, t, n, r, i) {
           null == (o = null == (a = f.quaternion) ? void 0 : a.times.length)
             ? 0
             : o,
-        ),
       );
       if (m < 2) return null;
       let g =
@@ -493,10 +418,7 @@ function ear(e, t, n, r, i) {
             ].map(b),
           ),
         ].sort((e, t) => e - t),
-        w =
-          x.length <= 2e3
-            ? x
-            : Array.from({ length: m }, (e, t) => b((t * y) / (m - 1))),
+        w = x,
         S = w.flatMap((e) => {
           var t, r;
           return Array.from(
@@ -584,7 +506,7 @@ function eao(e, t, n, r) {
   if (r.path) {
     var o, a, l;
     let s,
-      u = eai(e, t, i, r.path);
+      u = eai(e, t, i?.userData.hf_id===r.path.id?i:null, r.path);
     ((u.userData[RK] = n.name),
       eo$(u, r.path.settings),
       r.path.anchor ? (u.userData[RX] = r.path.anchor) : delete u.userData[RX]);
@@ -805,8 +727,20 @@ export const pathForCamera = eoO,
   readPathSettings = eoW,
   makePathCurve = eo1;
 export const bakeCameraPath = eo4,
-  readCameraRig = ear,
-  applyCameraRig = eao,
+  readCameraRig = (e,camera,path,clips,aspect)=>{
+    let root=camera;while(root.parent)root=root.parent;
+    return {...ear(e,camera,path,clips,aspect),paths:eoD(root).filter(p=>p.userData[RK]===camera.name).map(p=>ear(e,camera,p,clips,aspect).path),activePathId:path?.userData.hf_id??null};
+  },
+  applyCameraRig = (e,root,camera,rig)=>{
+    if(rig.paths){
+      for(const p of eoD(root).filter(p=>p.userData[RK]===camera.name))p.removeFromParent();
+      for(const path of rig.paths){camera.userData.selectedCameraPathId=path.id;eao(e,root,camera,{...rig,path,paths:undefined,animation:null});}
+      camera.userData.selectedCameraPathId=rig.activePathId;
+    }
+    const selected=rig.paths?.find(p=>p.id===rig.activePathId)??rig.path??rig.paths?.[0]??null;
+    if(selected)camera.userData.selectedCameraPathId=selected.id;
+    return eao(e,root,camera,{...rig,path:selected});
+  },
   replaceCameraAnimation = eo9,
   insertCameraKeyframe = ean;
 export const ensureCameraPaths = (
@@ -814,25 +748,37 @@ export const ensureCameraPaths = (
   animations,
   controls = { target: new THREE.Vector3() },
 ) => eaX({ modules: { THREE }, editableRoot: root, animations, controls });
-export const makePathPreview = (path) => {
+export const makePathPreview = (path, root, clips=[]) => {
   const settings = eoW(path);
   const curve = eo1(THREE, path, settings);
-  return curve
-    ? curve.getSpacedPoints(Math.min(Math.max(48 * eoL(path).length, 96), 640))
-    : [];
+  if(!curve)return [];
+  const count=Math.min(Math.max(48*eoL(path).length,96),640);
+  if(!root||!settings.follow)return curve.getSpacedPoints(count);
+  const camera=root.getObjectByName(path.userData[RK]),sampler=createScenePoseSampler(root,clips,[camera.name]),points=[];
+  try{
+    for(let i=0;i<=count;i++){
+      const elapsed=effectiveDuration(settings)*i/count;sampler.at((settings.start??0)+elapsed);
+      points.push(samplePathPose({curve,settings,camera,root},elapsed).position);
+    }
+    return points;
+  }finally{sampler.restore();}
 };
 // libtv eo3 refreshes geometry only when the path signature changes.
 export const pathPreviewSignature = (path) => {
   path.updateWorldMatrix(true, true);
   const settings = eoW(path);
-  return `${eoL(path).map(node=>node.position.toArray().map(value=>value.toFixed(4)).join(',')).join('|')}#${settings.curve}#${settings.tension}#${settings.closed}#${path.matrixWorld.elements.join(',')}`;
+  return `${eoL(path).map(node=>node.position.toArray().map(value=>value.toFixed(4)).join(',')).join('|')}#${JSON.stringify(settings)}#${path.matrixWorld.elements.join(',')}#${path.userData.pathPreviewRevision??0}`;
 };
 
 export const pathWaypoints = eoL;
 export const sceneBounds = eaK;
-export const pathDuration = (path) => eoB(eoW(path));
-export const updatePathSettings = (path, patch) =>
-  eo$(path, { ...eoW(path), ...patch });
+const effectiveDuration = settings => eoB(settings)/(Math.abs(settings.speed)>1e-4?Math.abs(settings.speed):1);
+export const pathDuration = path => effectiveDuration(eoW(path));
+export const updatePathSettings = (path, patch) => {
+  const next={...eoW(path),...patch};
+  if(Object.hasOwn(patch,'targetName')){if(!Object.hasOwn(patch,'targetId'))next.targetId=null;next.aimPoint=null;}
+  eo$(path,next);
+};
 export const sceneFocus = (root, controls) =>
   eaZ({ modules: { THREE }, editableRoot: root, controls });
 
@@ -869,7 +815,7 @@ export function addPathKeyframe(path, camera, time) {
   const index = Math.min(
     Math.max(
       Math.round(
-        Math.min(Math.max(time / eoB(eoW(path)), 0), 1) * (states.length - 1),
+        Math.min(Math.max((time-(eoW(path).start??0)) / effectiveDuration(eoW(path)), 0), 1) * (states.length - 1),
       ),
       1,
     ),
@@ -882,6 +828,7 @@ export function addPathKeyframe(path, camera, time) {
   );
   path.add(next);
   states.splice(index, 0, next);
+  updatePathSettings(path,{presetId:null,enabled:true});
   eoZ(path, states);
   return next;
 }
@@ -893,6 +840,7 @@ export function removePathKeyframe(path, id) {
   );
   if (!state) return false;
   state.removeFromParent();
+  updatePathSettings(path,{presetId:null,enabled:true});
   eoZ(path);
   return true;
 }
@@ -940,41 +888,3 @@ export function applyPathPreset(path, camera, id, focus) {
 }
 
 // libtv eoC/RU geometric preset builders, complete native builders; eaO still exposes the same six cards.
-function eox({ three: e, origin: t, focus: n, radius: r }) {
-  let i = new e.Vector3(0, 1, 0),
-    o = new e.Vector3().subVectors(t, n);
-  1e-8 > o.lengthSq() && o.set(0, 0, Math.max(r, 1));
-  let a = new e.Vector3().crossVectors(i, o);
-  1e-8 > a.lengthSq() ? a.set(1, 0, 0) : a.normalize();
-  let l = new e.Vector3(o.x, 0, o.z);
-  return (
-    1e-8 > l.lengthSq() ? l.crossVectors(a, i).normalize() : l.normalize(),
-    {
-      focus: n.clone(),
-      offset: o,
-      radius: Math.max(r, 0.001),
-      up: i,
-      right: a,
-      horizontal: l,
-      height: o.y,
-    }
-  );
-}
-function eow(e, t, n = 1, r = 0) {
-  let i = e.offset.clone().applyAxisAngle(e.up, t).multiplyScalar(n);
-  return ((i.y += e.radius * r), i.add(e.focus));
-}
-function eoS(e, t, n = 0, r = 0) {
-  let i = e.offset.clone().multiplyScalar(t);
-  return (
-    (i.y += e.radius * n),
-    i.add(e.right.clone().multiplyScalar(e.radius * r)),
-    i.add(e.focus)
-  );
-}
-function eok(e, t) {
-  return t <= 1 ? 0 : e / (t - 1);
-}
-const RH = 2 * Math.PI;
-const RU = [{id:"orbit-360",label:"Orbit 360",group:"orbit",build:e=>{let t=eox(e);return{points:Array.from({length:8},(e,n)=>eow(t,n/8*RH)),settings:{aim:"target",closed:!0,easing:"linear",duration:12}}}},{id:"orbit-half",label:"Orbit 180",group:"orbit",build:e=>{let t=eox(e);return{points:Array.from({length:5},(e,n)=>eow(t,(eok(n,5)-.5)*Math.PI)),settings:{aim:"target",duration:8}}}},{id:"arc-left",label:"Arc left",group:"orbit",build:e=>{let t=eox(e);return{points:[.55,0,-.55].map((e,n)=>eow(t,e,1,.12*(1===n))),settings:{aim:"target",duration:6}}}},{id:"arc-right",label:"Arc right",group:"orbit",build:e=>{let t=eox(e);return{points:[-.55,0,.55].map((e,n)=>eow(t,e,1,.12*(1===n))),settings:{aim:"target",duration:6}}}},{id:"spiral-up",label:"Spiral up",group:"orbit",build:e=>{let t=eox(e);return{points:Array.from({length:10},(e,n)=>{let r=eok(n,10);return eow(t,r*RH*1.5,1-.35*r,.9*r)}),settings:{aim:"target",easing:"linear",duration:14}}}},{id:"spiral-down",label:"Spiral down",group:"orbit",build:e=>{let t=eox(e);return{points:Array.from({length:10},(e,n)=>{let r=eok(n,10);return eow(t,-r*RH*1.5,1+.35*r,.9-.9*r)}),settings:{aim:"target",easing:"linear",duration:14}}}},{id:"figure-eight",label:"Figure eight",group:"orbit",build:e=>{let t=eox(e);return{points:Array.from({length:8},(e,n)=>{let r=n/8*RH,i=t.horizontal.clone().multiplyScalar(.5*t.radius*Math.sin(2*r));return i.add(t.right.clone().multiplyScalar(t.radius*Math.sin(r))),i.y=t.height,i.add(t.focus)}),settings:{aim:"target",closed:!0,easing:"linear",duration:16}}}},{id:"dolly-in",label:"Dolly in",group:"dolly",build:e=>{let t=eox(e);return{points:[1.6,1.1,.6].map(e=>eoS(t,e)),settings:{aim:"target",duration:6}}}},{id:"dolly-out",label:"Dolly out",group:"dolly",build:e=>{let t=eox(e);return{points:[.6,1.1,1.6].map(e=>eoS(t,e)),settings:{aim:"target",duration:6}}}},{id:"push-in-low",label:"Low push in",group:"dolly",build:e=>{let t=eox(e);return{points:[eoS(t,1.7,-.35),eoS(t,1.1,-.1),eoS(t,.65,.15)],settings:{aim:"target",easing:"out",duration:7}}}},{id:"truck-left",label:"Truck left",group:"dolly",build:e=>{let t=eox(e);return{points:[.9,0,-.9].map(e=>eoS(t,1,0,e)),settings:{aim:"target",duration:7}}}},{id:"truck-right",label:"Truck right",group:"dolly",build:e=>{let t=eox(e);return{points:[-.9,0,.9].map(e=>eoS(t,1,0,e)),settings:{aim:"target",duration:7}}}},{id:"s-curve",label:"S curve",group:"dolly",build:e=>{let t=eox(e);return{points:Array.from({length:5},(e,n)=>{let r=eok(n,5);return eoS(t,1.5-.9*r,0,.35*Math.sin(r*RH))}),settings:{aim:"tangent",duration:8}}}},{id:"crane-up",label:"Crane up",group:"crane",build:e=>{let t=eox(e);return{points:[eoS(t,1.15,-.4),eoS(t,1,.25),eoS(t,.95,.95)],settings:{aim:"target",duration:8}}}},{id:"crane-down",label:"Crane down",group:"crane",build:e=>{let t=eox(e);return{points:[eoS(t,.95,.95),eoS(t,1,.25),eoS(t,1.15,-.4)],settings:{aim:"target",duration:8}}}},{id:"flyover",label:"Flyover",group:"aerial",build:e=>{let t=eox(e);return{points:[eoS(t,1.8,-.15),eoS(t,.8,.7),eoS(t,-.2,1.1),eoS(t,-1.2,.6)],settings:{aim:"target",easing:"linear",duration:10}}}},{id:"drone-pullback",label:"Drone pullback",group:"aerial",build:e=>{let t=eox(e);return{points:Array.from({length:5},(e,n)=>{let r=eok(n,5);return eoS(t,.5+1.8*r,-.2+1.1*r)}),settings:{aim:"target",easing:"in",duration:10}}}},{id:"reveal-behind",label:"Reveal",group:"reveal",build:e=>{let t=eox(e);return{points:Array.from({length:5},(e,n)=>{let r=eok(n,5);return eow(t,(1-r)*Math.PI*.75,1.3-.3*r,-.3+.3*r)}),settings:{aim:"target",easing:"out",duration:9}}}}];
-export const cameraPathPresets = RU;

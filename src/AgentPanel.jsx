@@ -1,3 +1,4 @@
+import {randomUUID} from './uuid.js';
 import React,{useEffect,useLayoutEffect,useRef,useState} from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -30,7 +31,7 @@ export default function AgentPanel({client,reference,disabled,running,onGenerate
   const list=Array.from(picked);if(!list.length)return;expand();setError('');
   if(list.some(f=>f.size>20*1024*1024)){setError('每个参考附件不能超过 20 MiB。');return}
   if(filesRef.current.length+list.length>12){setError('每次最多上传 12 个附件。');return}
-  const records=list.map(file=>({id:crypto.randomUUID(),name:file.name,type:file.type,status:'uploading',file}));filesRef.current=[...filesRef.current,...records];setFiles(filesRef.current);
+  const records=list.map(file=>({id:randomUUID(),name:file.name,type:file.type,status:'uploading',file}));filesRef.current=[...filesRef.current,...records];setFiles(filesRef.current);
   await Promise.all(records.map(async record=>{try{const part=await uploadReference(record.file);setFiles(v=>v.map(f=>f.id===record.id?{...f,status:'ready',part}:f))}catch(e){setError(e.message);setFiles(v=>v.map(f=>f.id===record.id?{...f,status:'error'}:f))}}));
  };
  useEffect(()=>{if(attachment&&seenAnnotation.current!==attachment){seenAnnotation.current=attachment;addFiles([attachment])}},[attachment]);
@@ -58,6 +59,7 @@ export default function AgentPanel({client,reference,disabled,running,onGenerate
     {client.state.messages.map(m=><div key={m.id} className="agent-message" data-role={m.role} data-tool-status={m.toolStatus} role={m.role==='tool'?'status':undefined}>
      {m.reference&&<span className="agent-selectionTag agent-messageReference">{m.reference.label}</span>}
      {m.role==='assistant'?<Markdown remarkPlugins={[remarkGfm]} components={{a:({node,...props})=><a {...props} target="_blank" rel="noopener noreferrer"/>}}>{m.text}</Markdown>:<div>{m.role==='tool'&&<svg className="agent-toolIcon" width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m7 10 5 5a3 3 0 0 0 4-4L9 4a4 4 0 0 0-6 6l8 8M7 6l7 7"/></svg>}{m.text}</div>}
+     {m.role==='tool'&&m.toolError&&<details className="agent-toolError"><summary>{m.toolError.split('\n')[0]}</summary><pre>{m.toolError}</pre>{m.toolErrorDetails?.groups?.map((g,i)=><p key={i}><code>{g.path}</code>：{g.message}（{g.count} 项）<br/>{g.examples?.join('、')}{g.hint&&<><br/>{g.hint}</>}</p>)}{m.toolErrorDetails?.diagnostics?.map((d,i)=><p key={i}>{d.type}：{d.message}</p>)}{m.toolErrorDetails?.logId&&<p>日志编号：<code>{m.toolErrorDetails.logId}</code></p>}</details>}
      {m.attachments?.map((f,i)=><MessageAttachment key={i} file={f}/>)}
     </div>)}
     {running&&<span className="agent-pending" role="status">正在生成…</span>}
@@ -75,6 +77,6 @@ export default function AgentPanel({client,reference,disabled,running,onGenerate
    </div><button type={running?'button':'submit'} className="agent-sendButton" aria-label={running?'停止生成':'发送'} disabled={!running&&(disabled||settingsBusy||uploading||(!text.trim()&&!files.length))} onClick={running?event=>{event.preventDefault();onCancel()}:undefined}>{running?<StopGenerationIcon/>:<Spark/>}</button></div>
   </div>
  </form>
- {history&&<AgentHistoryPicker remaining={12-files.length} onClose={()=>{setHistory(false);input.current?.focus()}} onConfirm={parts=>{setFiles(v=>[...v,...parts.filter(p=>!v.some(f=>f.part?.assetId===p.assetId)).map(part=>({id:crypto.randomUUID(),name:part.name,type:part.type,status:'ready',part}))].slice(0,12));setHistory(false);input.current?.focus()}}/>}
+ {history&&<AgentHistoryPicker remaining={12-files.length} onClose={()=>{setHistory(false);input.current?.focus()}} onConfirm={parts=>{setFiles(v=>[...v,...parts.filter(p=>!v.some(f=>f.part?.assetId===p.assetId)).map(part=>({id:randomUUID(),name:part.name,type:part.type,status:'ready',part}))].slice(0,12));setHistory(false);input.current?.focus()}}/>}
  </>;
 }

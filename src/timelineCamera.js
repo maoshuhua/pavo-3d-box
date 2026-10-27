@@ -3,6 +3,18 @@
 // then the earliest shot. This also defines cuts, overlaps, gaps and the end.
 export const AUTO_CAMERA_VIEW = "auto";
 
+export function cameraFrameAspect(projectAspect, camera) {
+  const orthographicAspect=camera?.isOrthographicCamera?(camera.right-camera.left)/(camera.top-camera.bottom):null;
+  return [projectAspect,camera?.userData?.blockingStudioAspect,camera?.userData?.captureAspect,orthographicAspect,camera?.aspect,16/9]
+    .find(value=>Number.isFinite(value)&&value>0);
+}
+
+export function cameraPreviewSize(aspect, availableWidth, availableHeight) {
+  const ratio = Number.isFinite(aspect) && aspect > 0 ? aspect : 16 / 9;
+  const width = Math.max(0, Math.min(260, 260 * ratio, availableWidth, availableHeight * ratio));
+  return {width, height: width / ratio};
+}
+
 export function timelineCameraId(shots, time, duration) {
   if (!shots.length) return null;
   const at = duration > 0

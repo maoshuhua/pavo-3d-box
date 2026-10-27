@@ -1,7 +1,10 @@
-node_modules/
-dist/
+node_modules
+dist
 .env
 .env.*
 !.env.example
-.agent-data/
-test-output/
+.agent-data
+test-output
+output
+tmp
+.playwright-cli

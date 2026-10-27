@@ -1,6 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {AUTO_CAMERA_VIEW, timelineCameraId, resolveCameraViewId} from '../src/timelineCamera.js';
+import {AUTO_CAMERA_VIEW, timelineCameraId, resolveCameraViewId,cameraFrameAspect,cameraPreviewSize} from '../src/timelineCamera.js';
+
+test('film and PiP share project, camera metadata and native aspect with valid fallback',()=>{
+ const camera={aspect:4/3,userData:{captureAspect:3/2,blockingStudioAspect:9/16}};
+ assert.equal(cameraFrameAspect(16/9,camera),16/9);
+ assert.equal(cameraFrameAspect(null,camera),9/16);
+ camera.userData.blockingStudioAspect=0;
+ assert.equal(cameraFrameAspect(null,camera),3/2);
+ camera.userData.captureAspect=NaN;
+ assert.equal(cameraFrameAspect(null,camera),4/3);
+ camera.aspect=Infinity;
+ assert.equal(cameraFrameAspect(null,camera),16/9);
+ assert.equal(cameraFrameAspect(null,null),16/9);
+});
 
 const shots = [
   {cameraId:'a', start:0, end:4},

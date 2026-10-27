@@ -1,5 +1,6 @@
 import React, { useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { motion } from "motion/react";
+import {cameraPreviewSize} from './timelineCamera.js';
 
 export default function CameraPreview({
   label,
@@ -11,6 +12,7 @@ export default function CameraPreview({
   onRect,
   transition,
   floatingLayout,
+  aspect = 16 / 9,
 }) {
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [anchor, setAnchor] = useState({
@@ -22,6 +24,7 @@ export default function CameraPreview({
   const layout=useSyncExternalStore(floatingLayout.subscribe,floatingLayout.getSnapshot);
   useLayoutEffect(()=>{floatingLayout.setPipVisible(true);return()=>floatingLayout.setPipVisible(false)},[floatingLayout]);
   useLayoutEffect(()=>{floatingLayout.setPipAnchor(anchor)},[floatingLayout,anchor]);
+  useLayoutEffect(()=>{floatingLayout.setPipAspect(aspect);pointer.current=null;setDrag(null)},[floatingLayout,aspect]);
   useLayoutEffect(() => {
     const host = stage.current;
     const update = () =>
@@ -39,13 +42,9 @@ export default function CameraPreview({
       onRect(null);
     };
   }, [stage, onRect]);
-  // libtv Af: 260 x 146, 10px edge margin, 58px top safety area.
+  // Keep libtv's edge margins, but fit the outer frame to this camera's aspect.
   const availableHeight = size.height - dockHeight;
-  const width = Math.max(
-    0,
-    Math.min(260, size.width - 20, ((availableHeight - 58 - 10) * 260) / 146),
-  );
-  const height = (width * 146) / 260;
+  const {width,height}=cameraPreviewSize(aspect,size.width-20,availableHeight-58-10);
   const rect = drag ?? layout.pip ?? {
     left: anchor.horizontal === "left" ? 10 : size.width - 10 - width,
     top: anchor.vertical === "top" ? 58 : availableHeight - 10 - height,
@@ -145,8 +144,8 @@ export default function CameraPreview({
         </button>
         <button
           type="button"
-          aria-label="在机位视角中打开预览"
-          title="进入机位"
+          aria-label="打开成片预演"
+          title="成片预演"
           onClick={onEnter}
         >
           <svg

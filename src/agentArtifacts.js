@@ -1,3 +1,4 @@
+import {randomUUID} from './uuid.js';
 import {resultSchema, collaborationSchema, operationSchemas, worldSchema} from './agentSchemas.js';
 import {readGlb,saveAsset} from './glb.js';
 
@@ -25,7 +26,7 @@ export async function loadAgentArtifacts(value, signal) {
   }
   const assets=new Map();let total=bytes.byteLength;
   for(const op of operations){if(op.kind!=='object.create.from_glb')continue;const url=op.payload.assetId;
-    if(!assets.has(url)){if(assets.size>=32)throw Error('Agent 资源数量超限。');const response=await fetch(url,{signal,credentials:'omit'});if(!response.ok)throw Error('Agent 资源下载失败。');const data=await readGlb(new File([await response.blob()],'asset.glb'));total+=data.byteLength;if(total>100*1024*1024)throw Error('Agent 资源总大小超限。');signal.throwIfAborted();const id=crypto.randomUUID();await saveAsset({name:'agent-asset.glb'},data,id);assets.set(url,id);}
+    if(!assets.has(url)){if(assets.size>=32)throw Error('Agent 资源数量超限。');const response=await fetch(url,{signal,credentials:'omit'});if(!response.ok)throw Error('Agent 资源下载失败。');const data=await readGlb(new File([await response.blob()],'asset.glb'));total+=data.byteLength;if(total>100*1024*1024)throw Error('Agent 资源总大小超限。');signal.throwIfAborted();const id=randomUUID();await saveAsset({name:'agent-asset.glb'},data,id);assets.set(url,id);}
     op.payload={...op.payload,assetId:assets.get(url)};
   }
   signal.throwIfAborted();return {bytes,operations,result};

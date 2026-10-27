@@ -1,5 +1,6 @@
 // Adapted from libtv published _7 / _S and composer positioning hooks.
 import * as IS from 'react';
+import {cameraPreviewSize} from './timelineCamera.js';
     function _S({
         hostWidth: e,
         composerWidth: t,
@@ -20,6 +21,7 @@ import * as IS from 'react';
             r = 0,
             i = 0,
             o = !1,
+            pipAspect = 16 / 9,
             a = {
                 horizontal: "left",
                 vertical: "bottom"
@@ -46,8 +48,8 @@ import * as IS from 'react';
                         width: u,
                         height: c
                     },
-                    h = Math.max(0, Math.min(260, e - 20, (t - 58 - 10) * 260 / 146)),
-                    p = 146 * h / 260,
+                    h = cameraPreviewSize(pipAspect,e-20,t-58-10).width,
+                    p = h / pipAspect,
                     m = o && h > 0 ? {
                         left: "left" === a.horizontal ? 10 : e - 10 - h,
                         top: "top" === a.vertical ? 58 : t - 10 - p,
@@ -59,7 +61,7 @@ import * as IS from 'react';
                         c = o ? m : f,
                         d = o ? f : m,
                         p = e - 26 - u - 10;
-                    p >= 120 && p < h && (m.width = h = p, m.height = 146 * h / 260, m.top = t - 10 - m.height, m.left = "left" === a.horizontal ? 10 : e - 10 - h), u + m.width + 10 + 26 <= e ? d.left = "left" === a.horizontal ? c.left + c.width + 10 : c.left - 10 - d.width : (d === f && (m.height = Math.min(m.height, Math.max(0, t - 58 - 20 - l.minimumHeight)), m.width = 260 * m.height / 146, m.top = t - 10 - m.height, m.left = "left" === a.horizontal ? 10 : e - 10 - m.width, n = Math.max(0, c.top - 10 - 58), s = c.top - 10 - (t - l.bottom)), d.height = Math.min(d.height, Math.max(0, c.top - 10 - 58)), d === m && (d.width = 260 * d.height / 146, d.left = "left" === a.horizontal ? 10 : e - 10 - d.width), d.top = Math.max(58, c.top - 10 - d.height))
+                    p >= 120 && p < h && (m.width = h = p, m.height = h / pipAspect, m.top = t - 10 - m.height, m.left = "left" === a.horizontal ? 10 : e - 10 - h), u + m.width + 10 + 26 <= e ? d.left = "left" === a.horizontal ? c.left + c.width + 10 : c.left - 10 - d.width : (d === f && (m.height = Math.min(m.height, Math.max(0, t - 58 - 20 - l.minimumHeight)), m.width = pipAspect * m.height, m.top = t - 10 - m.height, m.left = "left" === a.horizontal ? 10 : e - 10 - m.width, n = Math.max(0, c.top - 10 - 58), s = c.top - 10 - (t - l.bottom)), d.height = Math.min(d.height, Math.max(0, c.top - 10 - 58)), d === m && (d.width = pipAspect * d.height, d.left = "left" === a.horizontal ? 10 : e - 10 - d.width), d.top = Math.max(58, c.top - 10 - d.height))
                 }
                 return {
                     pip: m,
@@ -117,6 +119,10 @@ import * as IS from 'react';
             }),
             setStage: (n, r) => {
                 (e !== n || t !== r) && (e = Math.max(0, n), t = Math.max(0, r), d())
+            },
+            setPipAspect: value => {
+                const next=Number.isFinite(value)&&value>0?value:16/9;
+                if(next!==pipAspect){pipAspect=next;d();}
             },
             setPipVisible: e => {
                 o !== e && (o = e, e && !r && (r = ++n), d())

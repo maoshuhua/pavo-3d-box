@@ -52,6 +52,7 @@ test('real Deep Agents loop exceeds old 100 steps, stops safely, and resets per 
   await assert.rejects(runDeepAgent(empty,{model}),/尚未生成新的成功产物/);
   const checkpoint=await DiskSaver.open(path.join(dir,'sessions',sessionId,'checkpoint.bin'));
   const saved=await checkpoint.getTuple({configurable:{thread_id:sessionId}});
+  await checkpoint.close();
   assert(saved.metadata.step>100,'the expanded real graph must run beyond the previous 100-step ceiling');
   assert(empty.events.some(e=>e.type==='TOOL_CALL_END'));
   assert(!empty.events.some(e=>e.type==='RESULT'),'exhaustion must not fabricate a scene result');

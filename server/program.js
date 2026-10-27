@@ -14,7 +14,7 @@ export async function evaluateProgram(source, context, signal) {
     const code=`"use strict";\n${source}\n;if(typeof build!=="function")throw Error("Define function build(ctx)"); JSON.stringify(build(${JSON.stringify(context)}));`;
     const result=vm.evalCode(code,'scene.js');
     if(result.error){const error=vm.dump(result.error);result.error.dispose();throw Error(error.message||String(error));}
-    try {return validateScene(JSON.parse(vm.getString(result.value)));}
+    try {return validateScene(JSON.parse(vm.getString(result.value)),context.scene);}
     finally {result.value.dispose();}
   } finally {vm.dispose();runtime.dispose();}
 }

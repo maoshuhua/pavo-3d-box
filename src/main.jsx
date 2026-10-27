@@ -1,3 +1,4 @@
+import {randomUUID} from './uuid.js';
 import React,{useEffect,useRef,useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import './style.css';
@@ -6,11 +7,12 @@ import Editor from './Editor.jsx';
 import {studioRequest,fetchStudioSnapshot} from './studioApi.js';
 import {readLocalProject,migrateLocalCache} from './localProject.js';
 import './Theme.css';
+import {synchronizeDataGeneration} from './dataReset.js';
 
 async function migrateLegacy(){
  const cached=await readLocalProject();if(!cached.snapshot&&!cached.journal)return;
  let state;try{state=JSON.parse(localStorage.getItem('3d-box:agent-session'));}catch{}
- const projectId=state?.projectId||localStorage.getItem('3d-box:legacy-project-id')||crypto.randomUUID();localStorage.setItem('3d-box:legacy-project-id',projectId);
+ const projectId=state?.projectId||localStorage.getItem('3d-box:legacy-project-id')||randomUUID();localStorage.setItem('3d-box:legacy-project-id',projectId);
  if(localStorage.getItem(`3d-box:sqlite-migrated:${projectId}`)==='true')return;
  const form=new FormData();form.set('projectId',projectId);form.set('name','未命名 3D-BOX');if(state)form.set('agentState',JSON.stringify(state));
  if(cached.snapshot){form.set('scene',new Blob([cached.snapshot.bytes]),'studio.glb');form.set('sceneJson',JSON.stringify(cached.snapshot.json));form.set('revision',String(Math.max(1,cached.snapshot.revision)));}
@@ -28,11 +30,12 @@ function Router(){
   let live=true;const controller=new AbortController();setLoading(true);setError('');setLoaded(null);
   (async()=>{
    const url=new URL(location,window.location.origin);
+   await synchronizeDataGeneration();
    if(url.pathname!=='/animation-preview'){
     initialMigration.current??=migrateLegacy().catch(e=>{initialMigration.current=null;throw e;});await initialMigration.current;if(live)setLoading(false);return;
    }
    let projectId=url.searchParams.get('projectId'),project;
-   if(!projectId){if(url.searchParams.get('newProject')!=='true')throw Error('项目地址无效');const draftId=url.searchParams.get('draftPromptId'),draft=draftId?await studioRequest(`/api/studio/draft/${encodeURIComponent(draftId)}`,{signal:controller.signal}):null,entryId=url.searchParams.get('entryId')||crypto.randomUUID();
+   if(!projectId){if(url.searchParams.get('newProject')!=='true')throw Error('项目地址无效');const draftId=url.searchParams.get('draftPromptId'),draft=draftId?await studioRequest(`/api/studio/draft/${encodeURIComponent(draftId)}`,{signal:controller.signal}):null,entryId=url.searchParams.get('entryId')||randomUUID();
     const animationPreview={version:1,...draft?{prompt:draft.prompt,promptParts:draft.promptParts,generationSettings:draft.generationSettings}:{}};
     project=await studioRequest('/api/studio/create',{method:'POST',body:{name:draft?.prompt?.trim().slice(0,80)||'未命名 3D-BOX',config:JSON.stringify({animationPreview})},headers:{'Idempotency-Key':entryId},signal:controller.signal});
     projectId=project.studioMeta.uuid;if(live)navigate(`/animation-preview?projectId=${projectId}`,true);return;

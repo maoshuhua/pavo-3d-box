@@ -52,6 +52,7 @@ function Ay({
   isSelected: l = !1,
   isTopView: s = !1,
   actions: u,
+  aspect = 16 / 9,
 }) {
   let c = (0, _$.useMemo)(() => r(e), [r, e]);
   return (0, _W.jsxs)("div", {
@@ -68,6 +69,7 @@ function Ay({
     children: [
       (0, _W.jsxs)("span", {
         className: In.default.monitorThumb,
+        style: {aspectRatio: Number.isFinite(aspect)&&aspect>0?aspect:16/9},
         children: [
           (0, _W.jsx)("button", {
             type: "button",
@@ -161,6 +163,7 @@ function Ab({
           {
             disabled: e,
             monitorKey: t.id,
+            aspect: t.aspect,
             label:
               t.name.trim() ||
               h("common:previewMonitorCamera", { index: o + 1 }),

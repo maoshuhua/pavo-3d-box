@@ -23,10 +23,11 @@ test('workspace paths cannot escape project',()=>{
 });
 test('LangGraph checkpoints survive service restart',async()=>{
  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'3dbox-checkpoint-'));
+ let saver,reopened;
  try{
-  const file=path.join(dir,'checkpoint.bin'),saver=await DiskSaver.open(file),checkpoint=emptyCheckpoint();checkpoint.channel_values={marker:'persistent'};
+  const file=path.join(dir,'checkpoint.bin'),checkpoint=emptyCheckpoint();saver=await DiskSaver.open(file);checkpoint.channel_values={marker:'persistent'};
   await saver.put({configurable:{thread_id:'test-session',checkpoint_ns:''}},checkpoint,{source:'input',step:0,parents:{}});
-  const reopened=await DiskSaver.open(file),tuple=await reopened.getTuple({configurable:{thread_id:'test-session'}});
+  await saver.close();reopened=await DiskSaver.open(file);const tuple=await reopened.getTuple({configurable:{thread_id:'test-session'}});
   assert.equal(tuple.checkpoint.channel_values.marker,'persistent');
- }finally{await fs.rm(dir,{recursive:true,force:true});}
+ }finally{await saver?.close();await reopened?.close();await fs.rm(dir,{recursive:true,force:true});}
 });
