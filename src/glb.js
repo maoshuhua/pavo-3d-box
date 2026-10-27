@@ -1,4 +1,7 @@
 import * as THREE from "three";
+import {RectAreaLightUniformsLib} from 'three/addons/lights/RectAreaLightUniformsLib.js';
+import {prepareLightingExport,restoreLightingNodes,remapLightingIds,updateLightingRuntime} from './lightingRuntime.js';
+import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
@@ -8,6 +11,8 @@ import { clone as cloneSkeleton } from "three/addons/utils/SkeletonUtils.js";
 import { createSceneEditor, assignEntityIds, entityId } from "./sceneEditor.js";
 import { createStudioGrid } from "./studioGrid.js";
 import {normalizeCameraPathBindings} from './cameraPathBindings.js';
+import {findMotionEntity} from './cameraPathSampling.js';
+import {AUTO_CAMERA_VIEW, timelineCameraId, resolveCameraViewId,cameraFrameAspect} from './timelineCamera.js';
 import {
   updateMonitor,
   disposeMonitor,
@@ -82,10 +87,12 @@ function disposeObject(root) {
 }
 
 export function createViewport(host, onDetails = () => {}, callbacks = {}) {
+  RectAreaLightUniformsLib.init();
   const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.outputColorSpace=THREE.SRGBColorSpace;
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFShadowMap;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   host.appendChild(renderer.domElement);
   const scene = new THREE.Scene();
   scene.background = new THREE.Color("#83888e");
@@ -101,13 +108,16 @@ export function createViewport(host, onDetails = () => {}, callbacks = {}) {
   const setWorld = (settings) => {
     worldSettings = structuredClone(settings);
     scene.background.setRGB(...settings.color);
-    const environmentScene = new THREE.Scene();
-    environmentScene.background = scene.background.clone();
+    const environmentScene = settings.environment?.preset==='studio'?new RoomEnvironment():new THREE.Scene();
+    if(!settings.environment||settings.environment.preset==='solid')environmentScene.background = settings.environment?.color?new THREE.Color().fromArray(settings.environment.color):scene.background.clone();
     const pmrem = new THREE.PMREMGenerator(renderer);
     scene.environment?.dispose();
     scene.environment = pmrem.fromScene(environmentScene).texture;
     pmrem.dispose();
-    scene.environmentIntensity = settings.strength;
+    environmentScene.dispose?.();
+    scene.environmentIntensity = settings.environment?.strength??settings.strength;
+    renderer.toneMapping=settings.toneMapping==='none'?THREE.NoToneMapping:THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure=settings.exposure??1;
   };
   setWorld(worldSettings);
   const root = new THREE.Group();
@@ -197,19 +207,19 @@ export function createViewport(host, onDetails = () => {}, callbacks = {}) {
     new THREE.Mesh(new THREE.PlaneGeometry(2, 2), overlayMaterial),
   );
   const activeCamera = () => {
-    const shot =
-      shots.find((shot) => time >= shot.start && time < shot.end) ??
-      (time === duration ? shots.at(-1) : null);
+    const shotId = timelineCameraId(shots, time, duration);
     return (
-      (monitorPlaying
-        ? cameras.find((value) => value.userData.hf_id === shot?.cameraId)
+      (monitorPlaying || cameraView === AUTO_CAMERA_VIEW
+        ? cameras.find((value) => value.userData.hf_id === shotId)
         : null) ??
       cameras.find((value) => value.uuid === selectedCamera) ??
-      cameras.find((value) => value.userData.hf_id === shot?.cameraId) ??
+      cameras.find((value) => value.userData.hf_id === shotId) ??
       cameras.find(value=>value.userData.hf_active_camera) ?? cameras[0] ??
       null
     );
   };
+  const viewedCameraId = () =>
+    resolveCameraViewId(cameraView, cameras, shots, time, duration);
   const publish = () =>
     onDetails({
       ...editor?.details(),
@@ -228,9 +238,10 @@ export function createViewport(host, onDetails = () => {}, callbacks = {}) {
       cameras: cameras.map((value) => ({
         id: value.uuid,
         name: value.name || "Camera",
+        aspect: cameraFrameAspect(getProjectAspect(),value),
       })),
       activeCameraId: activeCamera()?.uuid ?? null,
-      cameraView,
+      cameraView: viewedCameraId(),
       topView,
       previewMode,
       shots: shots.map((shot, index) => {
@@ -276,17 +287,11 @@ export function createViewport(host, onDetails = () => {}, callbacks = {}) {
         }));
       })(),
     });
-  const frameRect = (viewId = cameraView) => {
+  const frameRect = (viewId = viewedCameraId()) => {
     const width = Math.max(host.clientWidth, 1),
       height = Math.max(host.clientHeight, 1);
     const viewed = cameras.find((value) => value.uuid === viewId);
-    const aspect =
-      getProjectAspect() ??
-      (viewed
-        ? (viewed.userData.blockingStudioAspect ??
-          viewed.userData.captureAspect ??
-          viewed.aspect)
-        : null);
+    const aspect = viewed ? cameraFrameAspect(getProjectAspect(),viewed) : getProjectAspect();
     if (!Number.isFinite(aspect) || aspect <= 0)
       return { left: 0, top: 0, width, height };
     const frameWidth =
@@ -302,6 +307,7 @@ export function createViewport(host, onDetails = () => {}, callbacks = {}) {
   };
   const render = (includePreview = true) => {
     if (disposed) return;
+    updateLightingRuntime(root,time);
     const width = host.clientWidth,
       height = host.clientHeight;
     grid.update(camera, controls.target);
@@ -311,7 +317,7 @@ export function createViewport(host, onDetails = () => {}, callbacks = {}) {
       (value) =>
         value.uuid ===
         (exportCameraOverride === undefined
-          ? cameraView
+          ? viewedCameraId()
           : exportCameraOverride),
     );
     renderer.setRenderTarget(null);
@@ -319,12 +325,7 @@ export function createViewport(host, onDetails = () => {}, callbacks = {}) {
     renderer.setViewport(0, 0, width, height);
     // libtv ea3: compose/orbit fills the stage; camera views and clean exports use the project frame.
     if (viewed || (!includePreview && getProjectAspect() !== null)) {
-      const aspect =
-        getProjectAspect() ??
-        viewed.userData.blockingStudioAspect ??
-        viewed.userData.captureAspect ??
-        viewed.aspect ??
-        16 / 9;
+      const aspect = cameraFrameAspect(getProjectAspect(),viewed);
       const viewWidth = Math.min(width, height * aspect),
         viewHeight = viewWidth / aspect;
       renderer.setClearColor(0x000000);
@@ -343,11 +344,13 @@ export function createViewport(host, onDetails = () => {}, callbacks = {}) {
       );
       renderer.setScissorTest(true);
       const mainCamera = viewed ?? camera;
+      const originalAspect = mainCamera.aspect;
       if (mainCamera.isPerspectiveCamera) {
         mainCamera.aspect = aspect;
         mainCamera.updateProjectionMatrix();
       }
       renderer.render(scene, mainCamera);
+      if(mainCamera.isPerspectiveCamera){mainCamera.aspect=originalAspect;mainCamera.updateProjectionMatrix();}
       renderer.setScissorTest(false);
     } else {
       camera.aspect = width / height;
@@ -362,11 +365,8 @@ export function createViewport(host, onDetails = () => {}, callbacks = {}) {
         Math.max(1, Math.round(w * pixelRatio)),
         Math.max(1, Math.round(h * pixelRatio)),
       );
-      const aspect =
-        getProjectAspect() ??
-        previewCamera.userData.blockingStudioAspect ??
-        previewCamera.userData.captureAspect ??
-        w / h;
+      const aspect = cameraFrameAspect(getProjectAspect(),previewCamera);
+      const originalAspect = previewCamera.aspect;
       if (previewCamera.isPerspectiveCamera) {
         previewCamera.aspect = aspect;
         previewCamera.updateProjectionMatrix();
@@ -410,6 +410,7 @@ export function createViewport(host, onDetails = () => {}, callbacks = {}) {
       );
       renderer.setScissorTest(true);
       renderer.render(scene, previewCamera);
+      if(previewCamera.isPerspectiveCamera){previewCamera.aspect=originalAspect;previewCamera.updateProjectionMatrix();}
       renderer.setScissorTest(false);
       if (editor) {
         editor.helpers.visible = helperVisible;
@@ -473,7 +474,7 @@ export function createViewport(host, onDetails = () => {}, callbacks = {}) {
       height: Math.max(2, 2 * Math.floor((height * scale) / 2)),
     };
   };
-  const videoView = () => cameraView ?? activeCamera()?.uuid ?? null;
+  const videoView = () => viewedCameraId() ?? activeCamera()?.uuid ?? null;
   const getExportDetails = () => ({
     ...sizeFor(frameRect()),
     videoSize: sizeFor(frameRect(videoView())),
@@ -545,6 +546,7 @@ export function createViewport(host, onDetails = () => {}, callbacks = {}) {
   const applyRig = (object, rig) => {
     const clip = applyCameraRig(THREE, root, object, rig);
     setClips(replaceCameraAnimation(getClips(), object.name, clip));
+    evaluateClips();
   };
   const refreshCameraClip = (object, clip, oldDuration = duration) => {
     if (!clip) return;
@@ -585,8 +587,9 @@ export function createViewport(host, onDetails = () => {}, callbacks = {}) {
   const bakePath = (path) => {
     const object = root.getObjectByName(path.userData.blockingStudioPathFor);
     if (!object?.isCamera) return;
-    const clip = bakeCameraPath(THREE, root, path, object);
+    const clip = bakeCameraPath(THREE, root, path, object,getClips());
     refreshCameraClip(object, clip);
+    root.traverse(p=>{if(p.userData.blockingStudioPathFor===object.name)p.userData.pathPreviewRevision=(p.userData.pathPreviewRevision??0)+1;});
     if (!restoring)
       callbacks.onEdit?.({
         entityId: entityId(object),
@@ -619,26 +622,19 @@ export function createViewport(host, onDetails = () => {}, callbacks = {}) {
     const paths = path ? [path] : [];
     if (!path && object && operation.kind?.endsWith(".transform.set"))
       root.traverse((node) => {
-        const targetName = node.userData.blockingStudioPath?.targetName;
-        if (!node.userData.blockingStudioPathFor || !targetName) return;
-        for (
-          let target = root.getObjectByName(targetName);
-          target;
-          target = target.parent
-        ) {
-          if (target === object) {
-            paths.push(node);
-            break;
-          }
-        }
+        const settings=node.userData.blockingStudioPath;
+        if (!node.userData.blockingStudioPathFor || !settings) return;
+        const targets=[findMotionEntity(root,settings.targetId,settings.targetName),findMotionEntity(root,settings.follow?.entityId),root.getObjectByName(node.userData.blockingStudioPathFor)?.parent];
+        if(targets.some(target=>{for(let p=target;p;p=p.parent)if(p===object)return true;return false;}))paths.push(node);
       });
     for (const changedPath of paths) {
+      if(path&&object?.userData.blockingStudioWaypoint)changedPath.userData.blockingStudioPath={...changedPath.userData.blockingStudioPath,presetId:null,enabled:true};
       clearTimeout(pendingPaths.get(changedPath));
       pendingPaths.set(
         changedPath,
         setTimeout(() => {
           pendingPaths.delete(changedPath);
-          bakePath(changedPath);
+          try{bakePath(changedPath);}catch(error){editor.reportPathError(error);}
         }, 500),
       );
     }
@@ -654,17 +650,20 @@ export function createViewport(host, onDetails = () => {}, callbacks = {}) {
       cameras.some((object) => entityId(object) === shot.cameraId),
     );
     applyProjectAspect();
-    if (!cameras.some((object) => object.uuid === cameraView))
+    if (cameraView !== AUTO_CAMERA_VIEW && !cameras.some((object) => object.uuid === cameraView) ||
+        cameraView === AUTO_CAMERA_VIEW && !cameras.length)
       cameraView = null;
     if (!cameras.some((object) => object.uuid === selectedCamera))
       selectedCamera = null;
     root.traverse((object) => {
       if (!object.isLight || !object.shadow) return;
-      object.shadow.mapSize.set(2048, 2048);
-      object.shadow.bias = -0.0004;
-      object.shadow.normalBias = 0.02;
+      const shadowSettings=object.userData.studioShadow||{};
+      object.shadow.mapSize.set(shadowSettings.mapSize??2048,shadowSettings.mapSize??2048);
+      object.shadow.bias = shadowSettings.bias??-0.0004;
+      object.shadow.normalBias = shadowSettings.normalBias??0.02;
+      object.shadow.radius=shadowSettings.radius??3;
       const box = new THREE.Box3().setFromObject(root),
-        sphere = box.isEmpty()
+        sphere = (object.userData.lightingShadowBounds||object.userData.productShadowBounds)?new THREE.Sphere(new THREE.Vector3(...(object.userData.lightingShadowBounds||object.userData.productShadowBounds).center),(object.userData.lightingShadowBounds||object.userData.productShadowBounds).radius):box.isEmpty()
           ? new THREE.Sphere(new THREE.Vector3(), 1)
           : box.getBoundingSphere(new THREE.Sphere());
       const radius = Math.max(sphere.radius, 0.001),
@@ -683,6 +682,7 @@ export function createViewport(host, onDetails = () => {}, callbacks = {}) {
     controls.enabled = !cameraView;
   };
   const createExportScene = (object = root, fragment = false) => {
+    root.userData.blockingStudioWorldSettings=structuredClone(worldSettings);
     editor?.flushSceneEdits();
     flushPaths();
     root.userData.blockingStudioTimeline = JSON.stringify({
@@ -742,6 +742,7 @@ export function createViewport(host, onDetails = () => {}, callbacks = {}) {
         exportScene.add(node.target);
       }
     exportScene.updateMatrixWorld(true);
+    prepareLightingExport(exportScene);
     return {
       scene: exportScene,
       animations: getClips().map((clip) => clip.clone()),
@@ -785,8 +786,10 @@ export function createViewport(host, onDetails = () => {}, callbacks = {}) {
     publish,
     applyRig,
     flushPaths,
-    bakeRig: (path, object) =>
-      refreshCameraClip(object, bakeCameraPath(THREE, root, path, object)),
+    bakeRig: (path, object) => {
+      for(const [pending,timer] of pendingPaths)if(pending.userData.blockingStudioPathFor===object.name){clearTimeout(timer);pendingPaths.delete(pending);}
+      refreshCameraClip(object, bakeCameraPath(THREE, root, path, object,getClips()));
+    },
     seek: (value) => {
       time = Math.min(Math.max(value, 0), duration);
       evaluateClips();
@@ -842,7 +845,7 @@ export function createViewport(host, onDetails = () => {}, callbacks = {}) {
         item.actions = clips.map((clip) => item.mixer.clipAction(clip).play());
       }
     },
-    cameraView: () => cameraView,
+    cameraView: viewedCameraId,
     pause: () => callbacks.onPause?.(),
     onSelection: (object) => {
       const path = object && pathAncestor(object);
@@ -936,12 +939,10 @@ export function createViewport(host, onDetails = () => {}, callbacks = {}) {
     monitorContext.topView = topView;
     monitorContext.worldBackground = scene.background;
     monitorContext.worldStrength = worldSettings.strength;
-    const shot =
-      shots.find((value) => time >= value.start && time < value.end) ??
-      (time === duration ? shots.at(-1) : null);
+    const shotId = timelineCameraId(shots, time, duration);
     const activeId =
-      cameras.find((value) => entityId(value) === shot?.cameraId)?.uuid ??
-      cameraView ??
+      cameras.find((value) => entityId(value) === shotId)?.uuid ??
+      viewedCameraId() ??
       activeCamera()?.uuid;
     updateMonitor(
       host,
@@ -956,6 +957,7 @@ export function createViewport(host, onDetails = () => {}, callbacks = {}) {
       monitorPlaying,
       monitorPlaying ? activeId : null,
     );
+    updateLightingRuntime(root,time);
     if (monitorContext.needsRender) {
       monitorContext.needsRender = false;
       render();
@@ -1055,7 +1057,10 @@ export function createViewport(host, onDetails = () => {}, callbacks = {}) {
     }),
     isBusy: () => exporting,
     async replaceAgentScene(snapshot, operations = []) {
-      // Agent artifacts are validated in a detached viewport before committing.
+      // Parsing can fail (including decoder/resource failures). Keep the live
+      // scene intact until that asynchronous work has succeeded.
+      const prepared=snapshot?.bytes?await loader.parseAsync(snapshot.bytes.slice(0), ""):null;
+      if(disposed){if(prepared)disposeObject(prepared.scene);throw Error('3D 视窗已关闭。');}
       this.flushSceneEdits();
       editor.closeCameraAnimation();
       editor.select(null);
@@ -1078,7 +1083,7 @@ export function createViewport(host, onDetails = () => {}, callbacks = {}) {
       camera.up.set(0, 1, 0);
       monitorContext.libtvMonitor3dView = null;
       disposeMonitor(monitorContext);
-      await this.restoreProject(snapshot);
+      await this.restoreProject(snapshot,undefined,prepared);
       for (const operation of operations) await editor.replayOperation(operation);
       editor.topology();
       this.seek(0);
@@ -1113,13 +1118,14 @@ export function createViewport(host, onDetails = () => {}, callbacks = {}) {
     setEditingLocked(value) {
       editor.setLocked(value);
     },
-    async restoreProject(snapshot, journal) {
+    async restoreProject(snapshot, journal, prepared) {
       restoring = true;
       try {
         if (snapshot?.bytes) {
-          const gltf = await loader.parseAsync(snapshot.bytes.slice(0), "");
-          const model = gltf.scene;
+          const gltf = prepared || await loader.parseAsync(snapshot.bytes.slice(0), "");
+          const model = restoreLightingNodes(gltf.scene);
           root.userData = { ...model.userData };
+          if(model.userData.blockingStudioWorldSettings)setWorld(model.userData.blockingStudioWorldSettings);
           assignEntityIds(model);
           while (model.children.length) root.add(model.children[0]);
           registerAnimations(root, gltf.animations);
@@ -1250,13 +1256,10 @@ export function createViewport(host, onDetails = () => {}, callbacks = {}) {
             Math.min(frame / 30, Math.max(details.durationSeconds - 0.0001, 0)),
           );
           // libtv continuous preview: use the shot at this exact frame time.
-          const shot =
-            shots.find((value) => time >= value.start && time < value.end) ??
-            shots.filter((value) => value.start <= time).at(-1) ??
-            shots[0];
+          const shotId = timelineCameraId(shots, time, duration);
           exportCameraOverride =
-            originalView ??
-            cameras.find((value) => value.userData.hf_id === shot?.cameraId)
+            (originalView === AUTO_CAMERA_VIEW ? null : originalView) ??
+            cameras.find((value) => value.userData.hf_id === shotId)
               ?.uuid ??
             activeCamera()?.uuid ??
             null;
@@ -1403,6 +1406,7 @@ export function createViewport(host, onDetails = () => {}, callbacks = {}) {
         mixer.update(0);
       }
       root.updateMatrixWorld(true);
+      updateLightingRuntime(root,time);
       if (!monitorPlaying) invalidateMonitor();
       publish();
       render();
@@ -1425,6 +1429,9 @@ export function createViewport(host, onDetails = () => {}, callbacks = {}) {
       publish();
       render();
     },
+    setFilmPreview() {
+      this.setCameraView(shots.length ? AUTO_CAMERA_VIEW : activeCamera()?.uuid ?? null);
+    },
     async importFile(file) {
       const timelineBefore = {
         version: 1,
@@ -1433,7 +1440,7 @@ export function createViewport(host, onDetails = () => {}, callbacks = {}) {
       };
       const bytes = await readGlb(file);
       const gltf = await loader.parseAsync(bytes.slice(0), "");
-      const model = gltf.scene;
+      const model = restoreLightingNodes(gltf.scene);
       if (disposed) {
         disposeObject(model);
         return null;
@@ -1467,6 +1474,7 @@ export function createViewport(host, onDetails = () => {}, callbacks = {}) {
         }
         existingIds.add(node.userData.hf_id);
       });
+      remapLightingIds(model,remappedIds);
       model.traverse((node) => {
         let timeline = node.userData.blockingStudioTimeline;
         const text = typeof timeline === "string";
@@ -1559,6 +1567,7 @@ export function createViewport(host, onDetails = () => {}, callbacks = {}) {
       const existing = new THREE.Box3().setFromObject(root);
       const floor = existing.isEmpty() ? 0 : existing.min.y;
       root.add(model);
+      if(existing.isEmpty()&&model.userData.blockingStudioWorldSettings)setWorld(model.userData.blockingStudioWorldSettings);
       if (
         getProjectAspect() === null &&
         Number.isFinite(model.userData.libtvProjectAspect) &&

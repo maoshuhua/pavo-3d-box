@@ -241,6 +241,10 @@ input::-webkit-inner-spin-button,input::-webkit-outer-spin-button { -webkit-appe
 .mode-toolbar button svg { width:16px; height:16px; flex-shrink:0; }
 .mode-toolbar button[aria-pressed=true] { background:white; color:#111; }
 .mode-toolbar button:disabled { opacity:.4; cursor:default; }
+.scene-generation-status{position:absolute;top:calc(100% + 8px);left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:8px;width:max-content;padding:8px 12px;border:1px solid #ffffff0d;border-radius:12px;background:#262626;color:#fff;font:500 13px/20px Arial,sans-serif;pointer-events:none}
+.scene-generation-spinner{width:16px;height:16px;border:2px solid #ffffff40;border-top-color:#fff;border-right-color:#fff;border-radius:50%;animation:scene-generation-spin 1s linear infinite}
+@keyframes scene-generation-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.scene-generation-spinner{animation:none}}
 [hidden] { display:none!important; }
 .shot-trim { position:absolute; top:0; bottom:0; width:6px; cursor:ew-resize; touch-action:none; opacity:0; background:#ffffff66; border-radius:4px; }
 .shot-trim-start { left:0; }.shot-trim-end { right:0; }

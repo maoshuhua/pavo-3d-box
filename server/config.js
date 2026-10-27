@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {agentModels} from './agentModels.js';
 
 // Project traces/checkpoints stay on disk; do not inherit host tracing credentials.
 process.env.LANGSMITH_TRACING='false';
@@ -12,4 +13,4 @@ export const PORT = Number(process.env.AGENT_PORT || 8787);
 export const BASE = `http://127.0.0.1:${PORT}`;
 export const MAX_GLB = 100 * 1024 * 1024;
 export const MAX_ATTACHMENT = 20 * 1024 * 1024;
-export const configured = () => Boolean(process.env.AGENT_MODEL && process.env.AGENT_API_KEY);
+export const configured = () => Boolean(agentModels().length && process.env.AGENT_API_KEY);

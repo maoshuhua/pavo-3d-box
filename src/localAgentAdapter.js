@@ -15,13 +15,15 @@ async function observe(request,{signal,emit},initialResponse){
    finally{reader.releaseLock();}
    if(terminal)return;
    const latest=await state(request,signal);
-   if(latest&&latest.status!=='running'){if(latest.result)emit({type:'RESULT',result:latest.result,snapshotRevision:latest.snapshotRevision});emit(latest.status==='completed'?{type:'RUN_FINISHED'}:{type:'RUN_ERROR',message:latest.error||'任务已中断'});return;}
+   if(latest&&latest.status!=='running'){if(latest.result)emit({type:'RESULT',result:latest.result,snapshotRevision:latest.snapshotRevision});emit(['completed','partial','cancelled'].includes(latest.status)?{type:'RUN_FINISHED',status:latest.status,outcome:latest.outcome,message:latest.message}:{type:'RUN_ERROR',message:latest.error||'任务已中断'});return;}
    retry=0;
   }catch(error){if(signal.aborted)throw error;}
   response=null;await pause(Math.min(5000,500*2**Math.min(retry++,4)),signal);
  }
 }
 export const localAgentAdapter={
+ requiresCommittedResults:true,
+ baseUrl:base,
  async generate(request,{signal,emit}){
   const form=new FormData();form.set('payload',JSON.stringify({projectId:request.projectId,sessionId:request.sessionId,runId:request.runId,prompt:request.prompt,reference:request.reference,messages:request.messages.slice(-1),attachmentIds:request.attachmentIds,generationSettings:request.generationSettings,sceneJson:request.scene.json}));form.set('scene',new Blob([request.scene.bytes],{type:'model/gltf-binary'}),'current.glb');for(const file of request.attachments)form.append('attachments',file,file.name);
   let response;

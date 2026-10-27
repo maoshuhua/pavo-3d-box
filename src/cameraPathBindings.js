@@ -17,14 +17,14 @@ export function normalizeCameraPathBindings(root){
   const camera=resolve(path.userData.blockingStudioPathFor,cameras);
   if(!camera)continue;
   if(path.userData.blockingStudioPathFor!==camera.name){path.userData.blockingStudioPathFor=camera.name;changed=true;}
-  const key=camera.uuid,previous=seen.get(key);
+  const key=camera.uuid+":"+(path.userData.hf_id??path.uuid),previous=seen.get(key);
   // Older local snapshots may contain the same generated rig twice, with
   // identical persistent IDs. Never remove an independently authored path.
   if(previous&&path.userData.hf_id&&previous.userData.hf_id===path.userData.hf_id){path.removeFromParent();changed=true;continue;}
   seen.set(key,path);
   const children=[];path.traverse(node=>children.push(node));
   const settings=path.userData.blockingStudioPath;
-  const aim=settings&&resolve(settings.targetName,children);
+  const aim=settings&&(settings.targetId?nodes.find(n=>n.userData.hf_id===settings.targetId):resolve(settings.targetName,children)??resolve(settings.targetName,nodes));
   if(aim&&settings.targetName!==aim.name){settings.targetName=aim.name;changed=true;}
   const focus=resolve(camera.userData.blockingStudioDofFocus,children);
   if(focus&&camera.userData.blockingStudioDofFocus!==focus.name){camera.userData.blockingStudioDofFocus=focus.name;changed=true;}

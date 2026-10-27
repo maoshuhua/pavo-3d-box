@@ -13,3 +13,20 @@ test('lost POST acknowledgement attaches to the existing run, and detaching neve
  try{await localAgentAdapter.generate({projectId:'p',runId:'r',prompt:'生成',messages:[],attachments:[],scene:{json:{},bytes:new ArrayBuffer(20)}},{signal:new AbortController().signal,emit:()=>{}});assert.equal(posts,1);assert.ok(!methods.includes('DELETE'));const controller=new AbortController();controller.abort(new DOMException('Detached','AbortError'));await assert.rejects(()=>localAgentAdapter.resume({projectId:'p',runId:'r'},{signal:controller.signal,emit:()=>{}}),/Detached/);assert.ok(!methods.includes('DELETE'));await localAgentAdapter.stop({projectId:'p',runId:'r'});assert.equal(methods.at(-1),'DELETE');}
  finally{globalThis.fetch=original;}
 });
+
+test('a terminal partial run recovered through the status endpoint retains its outcome',async()=>{
+ const original=globalThis.fetch,events=[],outcome={intent:'scene',status:'partial',issues:[{message:'尚未检查结尾。'}]};
+ globalThis.fetch=async url=>String(url).includes('/events?')?response([]):Response.json({data:{status:'partial',outcome,message:'本轮部分完成。'}});
+ try{
+  await localAgentAdapter.resume({projectId:'p',runId:'r'},{signal:new AbortController().signal,emit:e=>events.push(e)});
+  assert.deepEqual(events,[{type:'RUN_FINISHED',status:'partial',outcome,message:'本轮部分完成。'}]);
+ }finally{globalThis.fetch=original;}
+});
+
+
+test('reconnection fallback preserves cancelled state without synthesizing RUN_ERROR',async()=>{
+ const original=globalThis.fetch,events=[];
+ globalThis.fetch=async url=>String(url).includes('/events?')?response([]):Response.json({code:0,data:{status:'cancelled',message:'已取消'}});
+ try{await localAgentAdapter.resume({projectId:'p',runId:'r'},{signal:new AbortController().signal,emit:e=>events.push(e)});assert.deepEqual(events,[{type:'RUN_FINISHED',status:'cancelled',outcome:undefined,message:'已取消'}]);}
+ finally{globalThis.fetch=original;}
+});

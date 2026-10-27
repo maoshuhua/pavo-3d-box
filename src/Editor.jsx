@@ -10,6 +10,7 @@ import ExportPanel from "./ExportPanel.jsx";
 import AgentPanel from "./AgentPanel.jsx";
 import { AgentClient } from "./agentClient.js";
 import { loadAgentArtifacts } from "./agentArtifacts.js";
+import {commitAgentScene,stageAgentSnapshot} from './agentSceneCommit.js';
 import {useAnnotation, AnnotationOverlay, composeAnnotation} from './libtvAnnotation.js';
 import MotionAnnotation from './MotionAnnotation.jsx';
 import SceneInspector, { Icon } from "./SceneInspector.jsx";
@@ -28,11 +29,11 @@ export default function Editor({project,serverSnapshot,history}) {
   const projectId=project.studioMeta.uuid,projectState=JSON.parse(project.config).animationPreview||{};
   const [projectTitle,setProjectTitle]=useState(project.studioMeta.name);
   const [floatingLayout]=useState(createFloatingLayout);
-  const [generationSettings,setGenerationSettings]=useState(projectState.generationSettings||{aspectRatio:'16:9',durationSeconds:'auto',agentMode:'G6',reasoningModel:'g6'});
+  const [generationSettings,setGenerationSettings]=useState(projectState.generationSettings||{aspectRatio:'16:9',durationSeconds:'auto'});
   const [navigationPending,setNavigationPending]=useState(null);
   const navigationDeps=useRef(null),navigation=useRef(null),agentSettled=useRef(Promise.resolve()),importSettled=useRef(Promise.resolve());
   if(!navigation.current)navigation.current=createProjectNavigationActions(()=>navigationDeps.current);
-  const generatedResult=useRef(projectState.generation||null),initialGeneration=useRef(false);
+  const generatedResult=useRef(projectState.generation||null),initialGeneration=useRef(false),agentApplyBlocked=useRef(false);
   const [timelineVisible, setTimelineVisible] = useState(
     () => localStorage.getItem("3d-box:timeline-visible") !== "false",
   );
@@ -214,6 +215,12 @@ export default function Editor({project,serverSnapshot,history}) {
     },
     save:async(force)=>{
       if(!ready.current||!autosave.current||!viewport.current)throw Error('场景仍在加载，请等待就绪后重试。');
+      if(agentApplyBlocked.current){
+        if(force)throw Error('请重新打开项目同步已保存的结果后再保存。');
+        // Leaving must remain available for recovery; only drain the retained
+        // local journal, without uploading the old viewport over the server.
+        const release=await autosave.current.pause();release();return;
+      }
       viewport.current.flushSceneEdits();
       if(force)autosave.current.changed();
       await autosave.current.flush();
@@ -248,6 +255,7 @@ export default function Editor({project,serverSnapshot,history}) {
     finally{setAnnotationBusy(false)}
   };
   const generateAgent = async (payload, onEvent) => {
+    if(agentApplyBlocked.current)throw Error('请重新打开项目同步已保存的结果后继续编辑。');
     if (agentController.current || busy || restoring || exportPhase || navigation.current.pending) return;
     let settleAgent;
     agentSettled.current=new Promise(resolve=>{settleAgent=resolve;});
@@ -265,35 +273,28 @@ export default function Editor({project,serverSnapshot,history}) {
         payload={...payload,reference:{...payload.reference,entityId:camera?.userData?.hf_id||payload.reference.cameraId}};
       }
       const handlers={signal:controller.signal,onEvent:()=>{onEvent?.();agentRefresh(n=>n+1);},onResult:async(result,signal,event)=>{
-        if(event?.snapshotRevision){
-          const saved=await fetchStudioSnapshot(projectId,signal);signal.throwIfAborted();if(!saved)throw Error('生成结果尚未保存');
-          ready.current=false;
-          try{await autosave.current.adoptSnapshot(saved);await editor.replaceAgentScene(saved);generatedResult.current=saved.generation||result;setTime(0);setAgentClip(null);}
-          finally{ready.current=true;}
-          return;
-        }
-        backup??={bytes:await (await editor.exportSceneGlb()).blob.arrayBuffer(),json:editor.exportSceneJson()};
-        const artifacts=await loadAgentArtifacts(result,signal);
-        const stagingHost=document.createElement('div');stagingHost.style.cssText='position:fixed;left:-10000px;width:640px;height:480px';document.body.append(stagingHost);
-        const staging=createViewport(stagingHost,()=>{});
-        let snapshot;
-        try {
-          await staging.replaceAgentScene({bytes:artifacts.bytes},artifacts.operations);
-          staging.flushSceneEdits();
-          snapshot={bytes:await (await staging.exportSceneGlb()).blob.arrayBuffer(),json:staging.exportSceneJson()};
-        } finally {staging.dispose();stagingHost.remove();}
-        signal.throwIfAborted();
-        // Atomically commit both files before publishing the replacement scene.
-        const priorResult=generatedResult.current;generatedResult.current=result;
-        try{await autosave.current.replaceSnapshot(snapshot);}catch(cause){generatedResult.current=priorResult;throw cause;}
-        try {await editor.replaceAgentScene(snapshot);backup=snapshot;setTime(0);setAgentClip(null);autosave.current.changed();}
-        catch(cause){generatedResult.current=priorResult;await autosave.current.replaceSnapshot(backup);await editor.replaceAgentScene(backup);throw cause;}
+        const createStaging=()=>{
+          const host=document.createElement('div');host.style.cssText='position:fixed;left:-10000px;width:640px;height:480px';document.body.append(host);
+          let viewport;try{viewport=createViewport(host,()=>{});}catch(cause){host.remove();throw cause;}
+          return {viewport,dispose(){try{viewport.dispose();}finally{host.remove();}}};
+        };
+        const priorResult=generatedResult.current;ready.current=false;
+        try{
+          const snapshot=await commitAgentScene({editor,autosave:autosave.current,signal,serverCommitted:!!event?.snapshotRevision,
+            prepare:async()=>{
+              if(event?.snapshotRevision){const saved=await fetchStudioSnapshot(projectId,signal);if(!saved||saved.revision<event.snapshotRevision)throw Error('生成结果尚未保存');return stageAgentSnapshot(saved,[],createStaging,signal);}
+              const artifacts=await loadAgentArtifacts(result,signal);
+              return stageAgentSnapshot({bytes:artifacts.bytes},artifacts.operations,createStaging,signal,true);
+            },beforePersist:snapshot=>{generatedResult.current=snapshot.generation||result;}});
+          backup=snapshot;setTime(0);setAgentClip(null);
+        }catch(cause){generatedResult.current=priorResult;if(cause.agentApplyBlocked)agentApplyBlocked.current=true;throw cause;}
+        finally{ready.current=true;}
       }};
       if(payload.resumeRun)await agentClient.resume(payload.resumeRun,handlers);
       else await agentClient.generate({...payload,scene:backup},handlers);
     } finally {
       agentController.current=null;setAgentRunning(false);
-      viewport.current?.setEditingLocked(!!navigation.current.pending);
+      viewport.current?.setEditingLocked(!!navigation.current.pending||agentApplyBlocked.current);
       settleAgent();
     }
   };
@@ -445,7 +446,7 @@ export default function Editor({project,serverSnapshot,history}) {
     })().catch(cause=>setError(cause.message));
   },[restoring]);
   useEffect(() => {
-    viewport.current?.setEditingLocked(busy || restoring || !!exportPhase || agentRunning || !!navigationPending);
+    viewport.current?.setEditingLocked(busy || restoring || !!exportPhase || agentRunning || !!navigationPending || agentApplyBlocked.current);
   }, [busy, restoring, exportPhase, agentRunning,navigationPending]);
   useEffect(() => {
     const close = (event) => {
@@ -618,7 +619,7 @@ export default function Editor({project,serverSnapshot,history}) {
         );
       if (event.key === "1") editor?.setCameraView(null);
       if (event.key === "3" && sceneDetails.activeCameraId)
-        editor?.setCameraView(sceneDetails.activeCameraId);
+        editor?.setFilmPreview();
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
@@ -743,7 +744,7 @@ export default function Editor({project,serverSnapshot,history}) {
           title="成片预演 · 3"
           disabled={!sceneDetails.activeCameraId}
           onClick={() =>
-            viewport.current?.setCameraView(sceneDetails.activeCameraId)
+            viewport.current?.setFilmPreview()
           }
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -751,6 +752,7 @@ export default function Editor({project,serverSnapshot,history}) {
           </svg>
           成片预演
         </button>
+        {agentRunning&&<div className="scene-generation-status" role="status"><span className="scene-generation-spinner" aria-hidden="true"/>正在生成场景…</div>}
       </div>
       {exportPhase && <div className="export-blocker" />}
       <ExportPanel
@@ -787,9 +789,10 @@ export default function Editor({project,serverSnapshot,history}) {
           <CameraPreview
             key="pip"
             label={sceneCamera.name}
+            aspect={sceneCamera.aspect}
             playing={playing}
             onPlay={togglePlay}
-            onEnter={() => viewport.current?.setCameraView(sceneCamera.id)}
+            onEnter={() => viewport.current?.setFilmPreview()}
             stage={host}
             floatingLayout={floatingLayout}
             dockHeight={timelineVisible ? dockHeight : 0}
@@ -866,7 +869,7 @@ export default function Editor({project,serverSnapshot,history}) {
         running={agentRunning} disabled={busy || restoring || !!exportPhase || !!navigationPending}
         bottom={timelineVisible ? dockHeight : 0} left={monitorLeft} right={inspectorWidth}
         reference={(sceneDetails.animation && agentClip) || (sceneDetails.selectedId ? (()=>{const row=sceneDetails.objects?.find(row=>row.id===sceneDetails.selectedId);return row?{type:'element',id:row.entityId||row.id,uuid:row.id,label:row.label,kind:row.kind}:null})() : null)}
-        onGenerate={generateAgent} onCancel={async()=>{try{await agentClient.cancel();agentController.current?.abort();}catch(cause){setError(cause.message);}}}/>
+        onGenerate={generateAgent} onCancel={async()=>{try{await agentClient.cancel();}catch(cause){setError(cause.message);}}}/>
       {annotationActive && <>
         <div className="motion-annotation-surface" style={{left:monitorLeft,right:inspectorWidth,bottom:timelineVisible?dockHeight:0}}>
           <AnnotationOverlay controller={annotation} stage={host.current}/>

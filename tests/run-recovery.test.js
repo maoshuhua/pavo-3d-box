@@ -15,7 +15,7 @@ const json={version:1,entities:[{id:'world',kind:'world',state:{settings:{type:'
 function glb(){const raw=Buffer.from(JSON.stringify({asset:{version:'2.0'},scene:0,scenes:[{nodes:[]}]})),length=Math.ceil(raw.length/4)*4,b=Buffer.alloc(20+length,32);b.writeUInt32LE(0x46546c67);b.writeUInt32LE(2,4);b.writeUInt32LE(b.length,8);b.writeUInt32LE(length,12);b.writeUInt32LE(0x4e4f534a,16);raw.copy(b,20);return b;}
 async function until(fn){for(let n=0;n<150;n++){const value=fn();if(value)return value;await new Promise(r=>setTimeout(r,10));}throw Error('State did not converge');}
 async function fixture(runAgent,fn){
- const parent=path.resolve('test-output');await fs.mkdir(parent,{recursive:true});const dir=await fs.mkdtemp(path.join(parent,'run-recovery-')),db=new StudioDatabase(path.join(dir,'studio.sqlite')),id='recovery-'+crypto.randomUUID();
+ const parent=path.resolve('test-output'),dir=await fs.mkdtemp(path.join(parent,'run-recovery-')),db=new StudioDatabase(path.join(dir,'studio.sqlite')),id='recovery-'+crypto.randomUUID();
  db.create({config:JSON.stringify({animationPreview:{version:1,prompt:'只生成一次'}})},null,id);const sid=db.createSession({projectId:id}),runId=crypto.randomUUID();
  const service=createServer({database:db,dataDir:dir,requireConfiguration:false,runAgent:async ctx=>{let abort;try{return await Promise.race([runAgent(ctx),new Promise((_,reject)=>{abort=()=>reject(ctx.signal.reason);ctx.signal.addEventListener('abort',abort,{once:true});})]);}finally{ctx.signal.removeEventListener('abort',abort);}}}),server=http.createServer(service.app);service.attachSocket(server);await new Promise(r=>server.listen(0,'127.0.0.1',r));const base=`http://127.0.0.1:${server.address().port}`;
  const form=(projectId=id,rid=runId)=>{const f=new FormData();f.set('payload',JSON.stringify({projectId,sessionId:sid,runId:rid,prompt:'恢复测试',sceneJson:json,messages:[{id:'only-user',role:'user',text:'恢复测试'}]}));f.set('scene',new Blob([glb()]),'scene.glb');return f;};
@@ -42,7 +42,7 @@ test('reopened observer retains explicit stop and prevents a concurrent second t
   const response=await fetch(base+'/api/agent/run',{method:'POST',body:form()});await started.promise;
   assert.equal((await fetch(base+'/api/agent/run',{method:'POST',body:form(id,crypto.randomUUID())})).status,409);
   const observer=await fetch(`${base}/api/agent/runs/${runId}/events?projectId=${id}`);await fetch(`${base}/api/agent/runs/${runId}?projectId=other`,{method:'DELETE'});assert.equal(stopped,false);
-  await fetch(`${base}/api/agent/runs/${runId}?projectId=${id}`,{method:'DELETE'});assert.ok((await observer.text()).includes('RUN_ERROR'));await response.text();assert.equal(stopped,true);assert.equal(db.runDetail(id,runId).status,'failed');
+  await fetch(`${base}/api/agent/runs/${runId}?projectId=${id}`,{method:'DELETE'});const terminal=await observer.text();assert.ok(terminal.includes('"status":"cancelled"'));assert.ok(!terminal.includes('RUN_ERROR'));await response.text();assert.equal(stopped,true);assert.equal(db.runDetail(id,runId).status,'cancelled');assert.equal(db.runDetail(id,runId).error,null);
  });
 });
 
@@ -53,5 +53,31 @@ test('WebSocket disconnect and reconnect observe the same running task',{timeout
   const run=db.history(id,sid).latestRun;await new Promise(r=>{ws.once('close',r);ws.close();});assert.equal(context.signal.aborted,false);
   const again=new WebSocket(base.replace('http:','ws:')+`/ws?project_id=${id}&run_id=${run.runId}&after_seq=${run.eventSeq}`),events=[];
   const completed=new Promise((resolve,reject)=>{again.on('error',reject);again.on('message',raw=>{const e=JSON.parse(raw);events.push(e);if(e.type==='RUN_FINISHED')resolve();});});await new Promise(r=>again.once('open',r));finish.resolve();await completed;await new Promise(r=>{again.once('close',r);again.close();});assert.equal(calls,1);assert.equal(db.history(id,sid).runStatus,'completed');assert.ok(events.every(e=>e.seq>run.eventSeq));
+ });
+});
+
+test('buffered text drains before cancellation and is complete in replay, history and the closed run log',{timeout:15000},async()=>{
+ const started=deferred(),text=Array.from({length:100},(_,i)=>String(i)+',').join('');
+ await fixture(async ctx=>{
+  for(let i=0;i<100;i++)ctx.emit({type:'TEXT_MESSAGE_CONTENT',messageId:'burst',delta:String(i)+','});
+  started.resolve();await new Promise(resolve=>ctx.signal.addEventListener('abort',resolve,{once:true}));ctx.signal.throwIfAborted();
+ },async({id,sid,runId,base,db,form})=>{
+  const response=await fetch(base+'/api/agent/run',{method:'POST',body:form()});await started.promise;
+  await fetch(`${base}/api/agent/runs/${runId}?projectId=${id}`,{method:'DELETE'});
+  const events=(await response.text()).split('\n').filter(l=>l.startsWith('data:')).map(l=>JSON.parse(l.slice(5)));
+  assert.equal(events.filter(e=>e.type==='TEXT_MESSAGE_CONTENT').map(e=>e.delta).join(''),text);assert.equal(events.at(-1).type,'RUN_FINISHED');assert.equal(events.at(-1).status,'cancelled');
+  assert.equal(db.history(id,sid).messages.find(m=>m.id==='burst').text,text);
+  const detail=db.runDetail(id,runId);assert.equal(detail.metrics.counters['events.inputDeltas'],100);assert(detail.metrics.counters['events.deltaFrames']<100);
+  const log=await fs.readFile(path.join(projectDir(id),'sessions',sid,'runs',runId+'.ndjson'),'utf8');assert.equal(JSON.parse(log.trim().split('\n').at(-1)).status,'cancelled');
+  const metrics=JSON.parse(await fs.readFile(path.join(projectDir(id),'sessions',sid,'runs',runId+'.metrics.json'),'utf8'));assert.equal(metrics.counters['events.inputDeltas'],100);
+ });
+});
+
+
+test('real agent failures remain failed instead of being reported as cancellation',{timeout:15000},async()=>{
+ await fixture(async()=>{throw Error('render failed');},async({id,runId,base,db,form})=>{
+  const response=await fetch(base+'/api/agent/run',{method:'POST',body:form()});
+  assert.ok((await response.text()).includes('RUN_ERROR'));const detail=db.runDetail(id,runId);
+  assert.equal(detail.status,'failed');assert.equal(detail.error,'render failed');
  });
 });

@@ -9,6 +9,7 @@ import {atomicWrite,safeId} from './storage.js';
 import {validateGlb} from './uploads.js';
 import {collaborationSchema} from '../src/agentSchemas.js';
 import presetConfig from './studioPresets.json' with {type:'json'};
+import {agentModels} from './agentModels.js';
 
 const allowedMime=new Set(['image/png','image/jpeg','image/webp','image/gif','image/avif','image/bmp','image/svg+xml','text/plain','text/markdown','application/pdf','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/vnd.ms-excel','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','model/gltf-binary','application/json','application/octet-stream','text/csv']);
 export const presets={banners:[],prompts:[{title:'预演一段城市街头的警匪追车戏',text:'帮我创建一段警匪在城市街道中飙车对战的预演动画，重点展现惊险的竞速和运镜效果。包含全景、中景、特写等多种镜头。',aspectRatio:'16:9',durationSeconds:8},{title:'环绕香水瓶运镜，预演产品广告',text:'搭建一个简洁的香水瓶，放在圆形展台上。瓶子不动，镜头围绕瓶身缓慢旋转一整圈（360度），最后推进到瓶盖特写，做一段产品广告预演。采用极简几何模型精度。',aspectRatio:'9:16',durationSeconds:10},{title:'用多个镜头预演古装庭院对峙戏',text:'创建一段古装庭院中的人物对峙戏，保留可编辑的人物和庭院场景，使用全景、中景和特写表现紧张气氛。',aspectRatio:'16:9',durationSeconds:15}]};
@@ -17,6 +18,12 @@ export function mountStudioApi(app,{database,dataDir=DATA,onStop=()=>{},isRunnin
  const store=database||new StudioDatabase(),sql=store.db,filesDir=path.join(dataDir,'studio-files');
  const ok=(res,data={})=>res.json({code:0,msg:'',data});
  const route=(method,url,fn)=>app[method](url,async(req,res,next)=>{try{await fn(req,res);}catch(e){next(e);}});
+ route('get','/api/studio/data-generation',async(req,res)=>{
+  let generation=null;
+  try{generation=JSON.parse(await fs.readFile(path.join(dataDir,'data-generation.json'),'utf8')).generation;}
+  catch(error){if(error.code!=='ENOENT')throw error;}
+  res.set('Cache-Control','no-store');ok(res,{generation});
+ });
  const json=express.json({limit:'23mb'});app.use('/api',json);app.use('/gateway',json);
  const multipart=multer({storage:multer.memoryStorage(),limits:{fileSize:MAX_GLB,files:2,fields:5,fieldSize:22*1024*1024}});
  const localUrl=id=>`${BASE}/local-assets/${id}`;
@@ -30,8 +37,8 @@ export function mountStudioApi(app,{database,dataDir=DATA,onStop=()=>{},isRunnin
   sql.prepare('INSERT INTO assets VALUES(?,?,?,?,?,?,?,?)').run(id,name,mime,kind,target,bytes.length,Date.now(),source);
   return {id,name,mimeType:mime,kind,size:bytes.length,url:localUrl(id)};
  }
- route('get','/api/task/agent-task/modes',(_,res)=>ok(res,{agentName:'libtv_coding_agent',modes:[{key:'G6',name:'3D-BOX Model Pro',isVip:false,version:''},{key:'DV4',name:'3D-BOX Model',isVip:false,version:''}]}));
- route('get','/api/task/free-quota/remaining',(req,res)=>ok(res,{scene:req.query.scene||'3D_animation',model:req.query.model||'G6',matched:false,limit:0,remaining:0}));
+ route('get','/api/task/agent-task/modes',(_,res)=>ok(res,{agentName:'libtv_coding_agent',modes:agentModels()}));
+ route('get','/api/task/free-quota/remaining',(req,res)=>ok(res,{scene:req.query.scene||'3D_animation',model:req.query.model||agentModels()[0]?.key||null,matched:false,limit:0,remaining:0}));
  route('get','/api/www/landing-activities/getById',(req,res)=>ok(res,{id:String(req.query.id),linkUrl:JSON.stringify(presets)}));
  route('get','/api/www/landing-activities/listByIds',(req,res)=>ok(res,{list:String(req.query.ids||'318').split(',').map(id=>({id,linkUrl:JSON.stringify(presets)}))}));
  route('post','/api/studio/list',(req,res)=>ok(res,store.list(req.body)));

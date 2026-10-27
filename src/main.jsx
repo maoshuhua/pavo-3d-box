@@ -6,6 +6,7 @@ import Editor from './Editor.jsx';
 import {studioRequest,fetchStudioSnapshot} from './studioApi.js';
 import {readLocalProject,migrateLocalCache} from './localProject.js';
 import './Theme.css';
+import {synchronizeDataGeneration} from './dataReset.js';
 
 async function migrateLegacy(){
  const cached=await readLocalProject();if(!cached.snapshot&&!cached.journal)return;
@@ -28,6 +29,7 @@ function Router(){
   let live=true;const controller=new AbortController();setLoading(true);setError('');setLoaded(null);
   (async()=>{
    const url=new URL(location,window.location.origin);
+   await synchronizeDataGeneration();
    if(url.pathname!=='/animation-preview'){
     initialMigration.current??=migrateLegacy().catch(e=>{initialMigration.current=null;throw e;});await initialMigration.current;if(live)setLoading(false);return;
    }

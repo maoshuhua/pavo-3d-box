@@ -9,6 +9,7 @@ import {uploadReference} from './studioApi.js';
 import AgentRichInput from './AgentRichInput.jsx';
 import AgentHistoryPicker from './AgentHistoryPicker.jsx';
 import AgentGenerationSettings from './AgentGenerationSettings.jsx';
+import {CollapseConversationIcon,StopGenerationIcon} from './AgentIcons.jsx';
 const Spark=()=> <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="m14 3 3 7 7 3-7 3-3 7-3-7-7-3 7-3ZM4 0l1.2 3L8 4 5.2 5 4 8 3 5 0 4l3-1Z"/></svg>;
 const imageFile=f=>f.kind==='image'||f.type==='image'||f.type?.startsWith('image/');
 function MessageAttachment({file}){const url=file.url||file.source?.value;return <span className="agent-messageAttachment">{imageFile(file)&&url&&<img src={url} alt={file.name||'参考图片'}/>}<span>{file.name}</span></span>}
@@ -51,12 +52,13 @@ export default function AgentPanel({client,reference,disabled,running,onGenerate
      onPointerDown={e=>{if(e.button!==0)return;e.preventDefault();e.stopPropagation();e.currentTarget.focus({preventScroll:true});drag.current={id:e.pointerId,y:e.clientY,height:actualHeight};e.currentTarget.setPointerCapture(e.pointerId)}}
      onPointerMove={e=>{if(drag.current?.id===e.pointerId){e.preventDefault();e.stopPropagation();setHeight(Math.max(minimum,Math.min(maximum,drag.current.height+drag.current.y-e.clientY)))}}}
      onPointerUp={endResize} onPointerCancel={endResize} onLostPointerCapture={()=>drag.current=null}><span/></div>
-    <p className="agent-projectTitle">{title||'3D-BOX'}</p><button type="button" className="agent-iconButton agent-collapseButton" aria-label="收起对话" aria-expanded={!compact} onClick={interaction.collapse}>⌄</button>
+    <p className="agent-projectTitle">{title||'3D-BOX'}</p><button type="button" className="agent-iconButton agent-collapseButton" aria-label="收起对话" aria-expanded={!compact} onClick={interaction.collapse}><CollapseConversationIcon/></button>
    </header>
    <div className="agent-messages" ref={messages} role="log" aria-live="polite" onScroll={e=>{nearBottom.current=e.currentTarget.scrollHeight-e.currentTarget.scrollTop-e.currentTarget.clientHeight<48}}>
     {client.state.messages.map(m=><div key={m.id} className="agent-message" data-role={m.role} data-tool-status={m.toolStatus} role={m.role==='tool'?'status':undefined}>
      {m.reference&&<span className="agent-selectionTag agent-messageReference">{m.reference.label}</span>}
      {m.role==='assistant'?<Markdown remarkPlugins={[remarkGfm]} components={{a:({node,...props})=><a {...props} target="_blank" rel="noopener noreferrer"/>}}>{m.text}</Markdown>:<div>{m.role==='tool'&&<svg className="agent-toolIcon" width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m7 10 5 5a3 3 0 0 0 4-4L9 4a4 4 0 0 0-6 6l8 8M7 6l7 7"/></svg>}{m.text}</div>}
+     {m.role==='tool'&&m.toolError&&<details className="agent-toolError"><summary>{m.toolError.split('\n')[0]}</summary><pre>{m.toolError}</pre>{m.toolErrorDetails?.groups?.map((g,i)=><p key={i}><code>{g.path}</code>：{g.message}（{g.count} 项）<br/>{g.examples?.join('、')}{g.hint&&<><br/>{g.hint}</>}</p>)}{m.toolErrorDetails?.diagnostics?.map((d,i)=><p key={i}>{d.type}：{d.message}</p>)}{m.toolErrorDetails?.logId&&<p>日志编号：<code>{m.toolErrorDetails.logId}</code></p>}</details>}
      {m.attachments?.map((f,i)=><MessageAttachment key={i} file={f}/>)}
     </div>)}
     {running&&<span className="agent-pending" role="status">正在生成…</span>}
@@ -71,7 +73,7 @@ export default function AgentPanel({client,reference,disabled,running,onGenerate
     <button type="button" className="agent-iconButton agent-uploadButton agent-annotateButton" aria-label="运镜轨迹" title="运镜轨迹 · ⇧P" disabled={disabled||running} onClick={onAnnotate}><SketchIcon/></button>
     {!compact&&onSettings&&<AgentGenerationSettings value={generationSettings} onChange={async value=>{setSettingsBusy(true);try{await onSettings(value)}finally{setSettingsBusy(false)}}} disabled={disabled||running||settingsBusy} modelOnly={modelOnly}/>}
     <input ref={upload} type="file" hidden multiple accept="image/*,.glb,.pdf,.doc,.docx,.xls,.xlsx,.txt,.md,.json,.csv" onChange={e=>{addFiles(e.target.files);e.target.value=''}}/>
-   </div><button type={running?'button':'submit'} className="agent-sendButton" aria-label={running?'停止生成':'发送'} disabled={!running&&(disabled||settingsBusy||uploading||(!text.trim()&&!files.length))} onClick={running?event=>{event.preventDefault();onCancel()}:undefined}>{running?<span aria-hidden="true">■</span>:<Spark/>}</button></div>
+   </div><button type={running?'button':'submit'} className="agent-sendButton" aria-label={running?'停止生成':'发送'} disabled={!running&&(disabled||settingsBusy||uploading||(!text.trim()&&!files.length))} onClick={running?event=>{event.preventDefault();onCancel()}:undefined}>{running?<StopGenerationIcon/>:<Spark/>}</button></div>
   </div>
  </form>
  {history&&<AgentHistoryPicker remaining={12-files.length} onClose={()=>{setHistory(false);input.current?.focus()}} onConfirm={parts=>{setFiles(v=>[...v,...parts.filter(p=>!v.some(f=>f.part?.assetId===p.assetId)).map(part=>({id:crypto.randomUUID(),name:part.name,type:part.type,status:'ready',part}))].slice(0,12));setHistory(false);input.current?.focus()}}/>}

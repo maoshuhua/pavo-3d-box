@@ -9,3 +9,6 @@
 .studio-auto input:checked:before{transform:translateX(16px);background:var(--nt-bg-float)}
 
 .studio-popup{left:max(16px,min(var(--studio-popup-left),calc(100vw - var(--studio-popup-width) - 16px)))}
+.studio-modelMenu{max-height:min(420px,calc(100vh - 32px));overflow-y:auto}
+.studio-modelMenu>button{flex-shrink:0;min-width:0}
+.studio-generationSettings>.studio-setting>span{max-width:220px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

@@ -1,4 +1,7 @@
 import * as THREE from "three";
+import {buildLightingRigs,readLightingRig,restoreLightingRig,convertLightingToCustom,customLightingConfig,restoreLightingNodes,updateLightingRuntime,createLight,lightProperties,setLightProperties,normalizeLightProperties,findLightingEntity} from './lightingRuntime.js';
+import {lightingRigSchema,lightingRigStateSchema} from './lightingSchema.js';
+import {restoreMaterialState,materialState} from './sceneEffects.js';
 import { TransformControls } from "three/addons/controls/TransformControls.js";
 import { readImportedAsset } from "./localProject.js";
 import {
@@ -64,28 +67,11 @@ function applyTransform(object, value) {
   object.updateMatrixWorld(true);
 }
 function lightState(object) {
-  return object.isLight
-    ? {
-        kind: object.isDirectionalLight
-          ? "directional"
-          : object.isSpotLight
-            ? "spot"
-            : object.isPointLight
-              ? "point"
-              : object.isHemisphereLight
-                ? "hemisphere"
-                : "ambient",
-        color: `#${object.color.getHexString()}`,
-        intensity: object.intensity,
-        castShadow: object.castShadow,
-        distance: object.distance ?? null,
-        angle:
-          object.angle === undefined
-            ? null
-            : THREE.MathUtils.radToDeg(object.angle),
-        penumbra: object.penumbra ?? null,
-      }
-    : null;
+  if(!object.isLight)return null;
+  const p=lightProperties(object);
+  return {...p,kind:p.type,distance:object.distance??null,angle:object.angle===undefined?null:THREE.MathUtils.radToDeg(object.angle),penumbra:object.penumbra??null,
+    targetLocal:object.target?object.worldToLocal(object.target.getWorldPosition(new THREE.Vector3())).toArray():null,
+    rigId:object.userData.studioRigId??null,locked:!!object.userData.studioLocked};
 }
 const materialOf = (object) =>
   Array.isArray(object.material) ? object.material[0] : object.material;
@@ -315,6 +301,7 @@ export function createSceneEditor(runtime) {
   };
   const notify = (operation) => {
     root.updateMatrixWorld(true);
+    updateLightingRuntime(root,runtime.getTime());
     runtime.onChange(operation);
   };
   const record = (entry) => {
@@ -370,19 +357,7 @@ export function createSceneEditor(runtime) {
         payload: {
           name,
           transform,
-          properties: {
-            type: lightState(object).kind,
-            color: object.color.toArray(),
-            intensity: object.intensity,
-            castShadow: object.castShadow,
-            range: object.distance > 0 ? object.distance : null,
-            ...(object.isSpotLight
-              ? {
-                  innerConeAngle: object.angle * (1 - object.penumbra),
-                  outerConeAngle: object.angle,
-                }
-              : {}),
-          },
+          properties: {...lightProperties(object),color:object.color.toArray(),range:object.distance??0},
         },
       };
     if (object.userData.hf_primitive)
@@ -410,7 +385,7 @@ export function createSceneEditor(runtime) {
     root.traverse((object) => {
       if (object.userData.blockingStudioPathFor) {
         const line = new THREE.Line(
-          new THREE.BufferGeometry().setFromPoints(makePathPreview(object)),
+          new THREE.BufferGeometry().setFromPoints(makePathPreview(object,root,runtime.getClips())),
           new THREE.LineBasicMaterial({
             color: 8176895,
             toneMapped: false,
@@ -508,7 +483,7 @@ export function createSceneEditor(runtime) {
   };
   const syncGizmos = () => {
     const object = selected && find(selected),
-      allowed = object && !locked && !runtime.cameraView();
+      allowed = object && !locked && !object.userData.studioLocked && !object.userData.studioLighting?.locked && !find(object.userData.studioRigId)?.userData.studioLighting?.locked && !runtime.cameraView();
     for (const set of sets) {
       if (allowed) set.control.attach(object);
       else set.control.detach();
@@ -521,7 +496,20 @@ export function createSceneEditor(runtime) {
     }
     gizmos.visible = !locked;
   };
-  let animationSelection = null;
+  let animationSelection = null, animationError = "";
+  const rigOwnerFor=object=>object?.isCamera?object:root.getObjectByName(pathAncestor(object)?.userData.blockingStudioPathFor??'');
+  const snapshotLightingFor=object=>{const group=object?.userData.studioLighting?object:find(object?.userData.studioRigId);return group?.userData.studioLighting?readLightingRig(group):null;};
+  const releaseLightingControl=(object,field)=>{
+    if(object?.userData.studioLighting){object.userData.studioLightingBinding=null;object.userData.studioLighting.reference.follow=false;}
+    if(object?.userData.studioRigId){
+      if(field==='position'){object.userData.studioSource=null;object.userData.studioKeyframes=object.userData.studioKeyframes?.map(({position,...f})=>f)||null;}
+      if(field==='rotation')object.userData.studioTarget=null;
+    }
+  };
+  const snapshotRigFor=object=>{
+    const owner=rigOwnerFor(object);
+    return owner?.isCamera?readCameraRig(THREE,owner,pathForCamera(root,owner.name),runtime.getClips(),owner.userData.blockingStudioAspect??null):null;
+  };
   const select = (id, preserveAnimation = false) => {
     api.flushSceneEdits();
     if (!preserveAnimation) animationSelection = null;
@@ -533,14 +521,48 @@ export function createSceneEditor(runtime) {
   };
   const finishTransform = () => {
     if (!editing) return;
-    const { object, before, rigBefore } = editing;
+    const { object, before, rigBefore, rigOwner, lightingBefore } = editing;
     editing = null;
     const after = transformOf(object);
-    if (JSON.stringify(before) === JSON.stringify(after)) return;
+    if (JSON.stringify(before) === JSON.stringify(after)) {
+      if(lightingBefore){
+        const group=find(lightingBefore.config.id),d=lightingBefore.lights.find(l=>l.id===object.userData.studioLightId);
+        if(group){group.userData.studioLighting=structuredClone(lightingBefore.config);group.userData.studioLightingBinding=structuredClone(lightingBefore.binding||null);}
+        if(d){object.userData.studioSource=d.sourceEntityId||null;object.userData.studioTarget=structuredClone(d.target||null);object.userData.studioKeyframes=structuredClone(d.keyframes||null);}
+      }
+      return;
+    }
+    if(lightingBefore){
+      const group=find(lightingBefore.config.id);
+      if(group.userData.studioLighting.presetId!=='custom')convertLightingToCustom(group);
+      group.userData.studioLighting=customLightingConfig(group);
+      const lightingAfter=readLightingRig(group),id=lightingAfter.config.id;
+      notify({entityId:id,kind:'lighting.rig.set',payload:{rig:lightingAfter}});
+      record({undo:()=>applyLightingState(id,lightingBefore),redo:()=>applyLightingState(id,lightingAfter)});
+      runtime.publish();return;
+    }
+    if(rigBefore&&rigOwner&&rigOwner!==object){
+      const timelineBefore=structuredClone(runtime.getTimeline());
+      const apply=rig=>{
+        runtime.applyRig(rigOwner,rig);runtime.setTimeline(structuredClone(timelineBefore));
+        const path=pathForCamera(root,rigOwner.name);
+        animationSelection=path?{pathId:path.uuid,stateId:null,view:'clip'}:null;
+        selected=rigOwner.uuid;topology();
+        notify({entityId:entityId(rigOwner),kind:'camera.rig.set',payload:{rig}});
+        runtime.seek(runtime.getTime());
+      };
+      try{runtime.bakeRig(pathAncestor(object),rigOwner);animationError='';}
+      catch(error){animationError=error.message;apply(rigBefore);runtime.publish();return;}
+      const rigAfter=snapshotRigFor(object);
+      record({merge:`path-transform:${entityId(object)}`,undo:()=>apply(rigBefore),redo:()=>apply(rigAfter)});
+      notify({entityId:entityId(rigOwner),kind:'camera.rig.set',payload:{rig:rigAfter}});
+      runtime.publish();return;
+    }
     let rigAfter;
     if (rigBefore?.animation) {
       rigAfter = {
         ...rigBefore,
+        path: null, paths: [], activePathId: null,
         animation: insertCameraKeyframe(
           rigBefore.animation,
           runtime.getTime(),
@@ -549,6 +571,8 @@ export function createSceneEditor(runtime) {
         ),
       };
       runtime.applyRig(object, rigAfter);
+      animationSelection=null;
+      topology();
       notify({
         entityId: entityId(object),
         kind: "camera.rig.set",
@@ -558,6 +582,7 @@ export function createSceneEditor(runtime) {
     const apply = (value, rig) => {
       if (rig) {
         runtime.applyRig(object, rig);
+        topology();
         notify({
           entityId: entityId(object),
           kind: "camera.rig.set",
@@ -580,15 +605,9 @@ export function createSceneEditor(runtime) {
         runtime.pause();
         dragStart = set.control.object && {
           transform: transformOf(set.control.object),
-          rig: set.control.object.isCamera
-            ? readCameraRig(
-                THREE,
-                set.control.object,
-                pathForCamera(root, set.control.object.name),
-                runtime.getClips(),
-                set.control.object.userData.blockingStudioAspect ?? null,
-              )
-            : null,
+          rig: snapshotRigFor(set.control.object),
+          rigOwner: rigOwnerFor(set.control.object),
+          lightingBefore: snapshotLightingFor(set.control.object),
         };
         activeMode = set.type;
         controls.enabled = false;
@@ -598,6 +617,8 @@ export function createSceneEditor(runtime) {
             object: set.control.object,
             before: dragStart.transform,
             rigBefore: dragStart.rig,
+            rigOwner: dragStart.rigOwner,
+            lightingBefore: dragStart.lightingBefore,
           };
           finishTransform();
         }
@@ -609,7 +630,10 @@ export function createSceneEditor(runtime) {
       runtime.render();
     });
     set.control.addEventListener("objectChange", () => {
-      if (set.control.object) notify(transformOperation(set.control.object));
+      if (set.control.object) {
+        releaseLightingControl(set.control.object,{translate:'position',rotate:'rotation',scale:'scale'}[set.type]);
+        notify(transformOperation(set.control.object));
+      }
     });
   }
   const hover = (event) => {
@@ -787,10 +811,22 @@ export function createSceneEditor(runtime) {
     runtime.pause();
     const before = cameraRig(object),
       timelineBefore = structuredClone(runtime.getTimeline());
-    const result = mutate();
-    if (result === false) return;
-    const path = pathForCamera(root, object.name);
-    runtime.bakeRig(path, object);
+    let result;
+    try {
+      result = mutate();
+      if (result === false) return false;
+      const path = pathForCamera(root, object.name);
+      runtime.bakeRig(path, object);
+      animationError = "";
+    } catch(error) {
+      runtime.applyRig(object,before);
+      runtime.setTimeline(timelineBefore);
+      const path=pathForCamera(root,object.name);
+      animationSelection=path?{pathId:path.uuid,stateId:null,view:"clip"}:null;
+      animationError=error.message;
+      topology();runtime.publish();runtime.render();
+      return false;
+    }
     const after = cameraRig(object),
       timelineAfter = structuredClone(runtime.getTimeline());
     const emit = (rig) =>
@@ -822,6 +858,27 @@ export function createSceneEditor(runtime) {
     emit(after);
     return result;
   };
+  const lightingState = id => {const g=find(id);return g?.userData.studioLighting?readLightingRig(g):null;};
+  const applyLightingState = (id,state) => {
+    const selectedEntity=find(selected);const selectedStable=selectedEntity&&entityId(selectedEntity);
+    if(state)restoreLightingRig(root,state);else find(id)?.removeFromParent();
+    const replacement=selectedStable&&find(selectedStable);if(replacement)selected=replacement.uuid;
+    topology();
+    notify({entityId:id,kind:'lighting.rig.set',payload:{rig:state}});
+    runtime.publish();
+  };
+  const changeLighting = (id,mutate,{allowLocked=false}={}) => {
+    if(locked)return;
+    api.flushSceneEdits();runtime.pause();
+    const group=find(id),before=lightingState(id);
+    if(!allowLocked&&(group?.userData.studioLighting?.locked||group?.children.some(l=>l.userData.studioLocked)))throw Error('布光组或其中灯光已锁定');
+    try{mutate();}catch(error){if(before)restoreLightingRig(root,before);else if(find(id)?.userData.studioLighting)find(id).removeFromParent();throw error;}
+    const after=lightingState(id);
+    // Rebind selection after preset replacement.
+    if(group&&selected===group.uuid)selected=find(id)?.uuid??null;
+    topology();notify({entityId:id,kind:'lighting.rig.set',payload:{rig:after}});
+    record({undo:()=>applyLightingState(id,before),redo:()=>applyLightingState(id,after)});runtime.publish();
+  };
   const api = {
     select,
     find,
@@ -831,6 +888,7 @@ export function createSceneEditor(runtime) {
     topology,
     openCameraAnimation(id = selected, clipDuration) {
       if (locked) return;
+      animationError='';
       const node = find(id),
         ancestor = node && pathAncestor(node);
       const object = node?.isCamera
@@ -839,7 +897,8 @@ export function createSceneEditor(runtime) {
           ? root.getObjectByName(ancestor.userData.blockingStudioPathFor)
           : null;
       if (!object?.isCamera) return;
-      let path = pathForCamera(root, object.name);
+      let path = ancestor ?? pathForCamera(root, object.name);
+      if (path)object.userData.selectedCameraPathId=entityId(path);
       if (!path)
         editRig(object, () => {
           path = createCameraPath(
@@ -854,6 +913,7 @@ export function createSceneEditor(runtime) {
     },
     closeCameraAnimation() {
       animationSelection = null;
+      animationError='';
       select(null);
     },
     selectAnimationNode(id) {
@@ -873,7 +933,7 @@ export function createSceneEditor(runtime) {
       if (index < 0) return;
       runtime.pause();
       runtime.seek(
-        (pathDuration(context.path) * index) / Math.max(states.length - 1, 1),
+        (readPathSettings(context.path).start??0) + (pathDuration(context.path) * index) / Math.max(states.length - 1, 1),
       );
       animationSelection = {
         pathId: context.path.uuid,
@@ -915,14 +975,11 @@ export function createSceneEditor(runtime) {
     applyMotionPreset(id) {
       const context = animationContext();
       if (!context) return;
-      editRig(context.object, () =>
-        applyPathPreset(
-          context.path,
-          context.object,
-          id,
-          sceneFocus(root, controls),
-        ),
-      );
+      if(editRig(context.object, () => {
+        const settings=readPathSettings(context.path);
+        if(!applyPathPreset(context.path,context.object,id,sceneFocus(root,controls)))return false;
+        updatePathSettings(context.path,{enabled:true,start:settings.start??0,duration:settings.duration,speed:settings.speed,bounce:settings.bounce});
+      })===false)return;
       animationSelection = {
         pathId: context.path.uuid,
         stateId: null,
@@ -935,9 +992,31 @@ export function createSceneEditor(runtime) {
       if (!context) return;
       editRig(
         context.object,
-        () => updatePathSettings(context.path, patch),
+        () => {
+          const settings=readPathSettings(context.path),oldEnd=(settings.start??0)+pathDuration(context.path);
+          if(patch.aim==='fixed')patch={...patch,fixedQuaternion:context.object.getWorldQuaternion(new THREE.Quaternion()).toArray()};
+          if(Object.hasOwn(patch,'targetName'))patch={...patch,targetId:root.getObjectByName(patch.targetName)?.userData.hf_id??null};
+          updatePathSettings(context.path,patch);
+          if(settings.presetId&&(Object.hasOwn(patch,'intensity')||Object.hasOwn(patch,'framing'))){
+            const next=readPathSettings(context.path);
+            applyPathPreset(context.path,context.object,settings.presetId,sceneFocus(root,controls));
+            updatePathSettings(context.path,next);
+          }
+          const shift=pathDuration(context.path)- (oldEnd-(settings.start??0));
+          if(shift)root.traverse(p=>{
+            if(p!==context.path&&p.userData.blockingStudioPathFor===context.object.name&&(readPathSettings(p).start??0)>=oldEnd-1e-6)
+              updatePathSettings(p,{start:readPathSettings(p).start+shift});
+          });
+        },
         `path-settings:${context.path.uuid}:${Object.keys(patch).join()}`,
       );
+    },
+    setPathFollow(id) {
+      const context=animationContext(),target=id&&find(id);
+      if(!context||id&&!target)return;
+      for(let p=target;p;p=p.parent)if(p.isCamera){animationError='不能跟随相机或相机子节点';runtime.publish();return;}
+      root.updateMatrixWorld(true);
+      api.setPathSetting({follow:target?{entityId:entityId(target),positionSpace:'world',offset:[0,0,0],bindMatrix:target.matrixWorld.toArray()}:null,...target?{aim:'target',targetName:target.name,targetId:entityId(target)}:{}});
     },
     setAnimationFov(value) {
       const context = animationContext();
@@ -988,7 +1067,12 @@ export function createSceneEditor(runtime) {
         field === "rotation"
           ? context.object
           : (find(animationSelection.stateId) ?? context.path);
-      api.setTransform(field, axis, value, node);
+      if(!Number.isFinite(value))return;
+      editRig(context.object,()=>{
+        node[field][['x','y','z'][axis]]=field==='rotation'?THREE.MathUtils.degToRad(value):value;
+        if(field==='rotation')updatePathSettings(context.path,{fixedQuaternion:context.object.getWorldQuaternion(new THREE.Quaternion()).toArray()});
+        else updatePathSettings(context.path,{presetId:null,enabled:true});
+      },`path-transform:${entityId(node)}:${field}:${axis}`);
     },
     setLocked(value) {
       locked = value;
@@ -1014,7 +1098,7 @@ export function createSceneEditor(runtime) {
           const signature = pathPreviewSignature(line.userData.path);
           if (signature !== line.userData.signature) {
             line.userData.signature = signature;
-            line.geometry.setFromPoints(makePathPreview(line.userData.path));
+            line.geometry.setFromPoints(makePathPreview(line.userData.path,root,runtime.getClips()));
             line.geometry.computeBoundingSphere();
           }
         }
@@ -1057,7 +1141,7 @@ export function createSceneEditor(runtime) {
             id: object.uuid,
             entityId: entityId(object),
             name: object.name,
-            label: object.name || `${entityKind(object)} ${rows.length + 1}`,
+            label: object.userData.studioLabel || object.name || `${entityKind(object)} ${rows.length + 1}`,
             kind: entityKind(object),
             depth,
             parentId: parent === root ? null : parent.uuid,
@@ -1084,13 +1168,17 @@ export function createSceneEditor(runtime) {
             ...animationSelection,
             cameraId: context.object.uuid,
             cameraLabel: context.object.name,
+            error: animationError,
+            start: readPathSettings(context.path).start??0,
+            diagnostics: context.path.userData.cameraMotionDiagnostics??[],
+            segments: (()=>{const paths=[];root.traverse(p=>{if(p.userData.blockingStudioPathFor===context.object.name)paths.push({id:p.uuid,label:p.name,start:readPathSettings(p).start??0});});return paths.sort((a,b)=>a.start-b.start);})(),
             duration: pathDuration(context.path),
             settings: readPathSettings(context.path),
             fov: context.object.fov,
             states: pathWaypoints(context.path).map((node, index, all) => ({
               id: node.uuid,
               index,
-              time:
+              time: (readPathSettings(context.path).start??0)+
                 (pathDuration(context.path) * index) /
                 Math.max(all.length - 1, 1),
             })),
@@ -1108,6 +1196,8 @@ export function createSceneEditor(runtime) {
         : null;
       return {
         animation,
+        lightingRigs: (()=>{const rigs=[];root.traverse(g=>{if(g.userData.studioLighting)rigs.push(readLightingRig(g));});return rigs;})(),
+        worldSettings:structuredClone(runtime.getWorld()),
         objects: rows,
         selectedId: object?.uuid ?? null,
         transformMode: mode,
@@ -1122,6 +1212,7 @@ export function createSceneEditor(runtime) {
               scale: object.scale.toArray(),
               color: material ? `#${material.color.getHexString()}` : null,
               light: lightState(object),
+              lightingRig:object.userData.studioLighting?readLightingRig(object):null,
               camera: object.isPerspectiveCamera
                 ? {
                     fov: object.fov,
@@ -1211,26 +1302,67 @@ export function createSceneEditor(runtime) {
       });
       runtime.publish();
     },
+    getCustomLightingConfig(id) {const group=find(id);if(!group?.userData.studioLighting)throw Error('找不到布光组');return customLightingConfig(group);},
+    setLighting(config) {
+      const parsed=lightingRigSchema.parse(config);
+      changeLighting(parsed.id,()=>buildLightingRigs(root,[parsed]));
+    },
+    removeLighting(id) {changeLighting(id,()=>find(id)?.removeFromParent());},
+    convertLightingToCustom(id) {changeLighting(id,()=>{const group=find(id);if(!group?.userData.studioLighting)throw Error('找不到布光组');convertLightingToCustom(group);});},
+    setLightingEnabled(id,enabled) {changeLighting(id,()=>{const g=find(id);g.visible=enabled;g.userData.studioLighting.enabled=enabled;});},
+    setLightingLocked(id,value) {changeLighting(id,()=>{find(id).userData.studioLighting.locked=value;},{allowLocked:true});},
+    setLightingLightLocked(id,lightId,value) {
+      changeLighting(id,()=>{const g=find(id),light=find(lightId);if(g?.userData.studioLighting.locked)throw Error('请先解锁布光组');if(!light?.isLight||light.userData.studioRigId!==id)throw Error('找不到灯光');light.userData.studioLocked=value;if(g.userData.studioLighting.presetId==='custom')g.userData.studioLighting=customLightingConfig(g);},{allowLocked:true});
+    },
+    addLightingLight(id,type) {
+      changeLighting(id,()=>{
+        const g=find(id);if(!g?.userData.studioLighting)throw Error('找不到布光组');
+        const config=customLightingConfig(g),lightId='light-'+crypto.randomUUID();
+        config.lights.push({id:lightId,role:type==='ambient'||type==='hemisphere'?'ambient':'fill',position:[2,3,2],...['directional','spot','area'].includes(type)?{target:{point:[0,0,0]}}:{},properties:{type,color:'#ffffff',intensity:type==='point'||type==='spot'?20:1,castShadow:false}});
+        buildLightingRigs(root,[config]);
+      });
+    },
+    setLightingLight(id,lightId,patch) {
+      changeLighting(id,()=>{
+        const g=find(id);if(!g?.userData.studioLighting)throw Error('找不到布光组');
+        if(g.userData.studioLighting.presetId!=='custom')convertLightingToCustom(g);
+        const light=findLightingEntity(g,lightId);if(!light?.isLight)throw Error('找不到灯光');
+        if(patch.properties)setLightProperties(light,{...lightProperties(light),...patch.properties});
+        if(patch.position)light.position.fromArray(patch.position);
+        if(patch.enabled!==undefined)light.visible=patch.enabled;
+        if(patch.locked!==undefined)light.userData.studioLocked=patch.locked;
+        g.userData.studioLighting.lights=readLightingRig(g).lights;
+      });
+    },
+    setSelectedLight(patch) {
+      const light=find(selected);if(!light?.isLight||locked||light.userData.studioLocked)return;
+      if(light.userData.studioRigId)return api.setLightingLight(light.userData.studioRigId,entityId(light),{properties:patch});
+      const before=lightProperties(light),after={...before,...patch};
+      const apply=p=>{setLightProperties(light,p);topology();notify({entityId:entityId(light),kind:'light.properties.set',payload:{properties:{...p,color:light.color.toArray()}}});runtime.publish();};
+      apply(after);record({merge:'light:'+light.uuid,undo:()=>apply(before),redo:()=>apply(after)});
+    },
+    setWorldSettings(patch) {
+      if(locked)return;const before=structuredClone(runtime.getWorld()),after={...before,...patch};
+      const apply=settings=>{runtime.setWorld(settings);notify({entityId:'world',kind:'world.settings.set',payload:{settings}});runtime.publish();};
+      apply(after);record({merge:'world',undo:()=>apply(before),redo:()=>apply(after)});
+    },
     setTransform(field, axis, value, override) {
       const object = override ?? find(selected);
-      if (!object || locked || !Number.isFinite(value)) return;
+      if (!object || locked || object.userData.studioLocked || object.userData.studioLighting?.locked || find(object.userData.studioRigId)?.userData.studioLighting?.locked || !Number.isFinite(value)) return;
+      const nextValue=field==='rotation'?THREE.MathUtils.degToRad(value):value;
+      if(object[field][['x','y','z'][axis]]===nextValue)return;
       if (!editing || editing.object !== object) {
         finishTransform();
         runtime.pause();
         editing = {
           object,
           before: transformOf(object),
-          rigBefore: object.isCamera
-            ? readCameraRig(
-                THREE,
-                object,
-                pathForCamera(root, object.name),
-                runtime.getClips(),
-                object.userData.blockingStudioAspect ?? null,
-              )
-            : null,
+          rigBefore: snapshotRigFor(object),
+          rigOwner: rigOwnerFor(object),
+          lightingBefore: snapshotLightingFor(object),
         };
       }
+      releaseLightingControl(object,field);
       object[field][["x", "y", "z"][axis]] =
         field === "rotation" ? THREE.MathUtils.degToRad(value) : value;
       notify(transformOperation(object));
@@ -1238,6 +1370,7 @@ export function createSceneEditor(runtime) {
     flushSceneEdits() {
       finishTransform();
     },
+    reportPathError(error) {animationError=error.message;runtime.publish();},
     setColor(value) {
       const object = find(selected),
         material = object && editableMaterial(object);
@@ -1313,6 +1446,9 @@ export function createSceneEditor(runtime) {
     toggleHidden(id) {
       const object = find(id);
       if (!object || locked) return;
+      if(object.userData.studioLocked||object.userData.studioLighting?.locked||find(object.userData.studioRigId)?.userData.studioLighting?.locked)return;
+      if(object.userData.studioLighting)return api.setLightingEnabled(entityId(object),!object.visible);
+      if(object.userData.studioRigId)return api.setLightingLight(object.userData.studioRigId,entityId(object),{enabled:!object.visible});
       const before = object.visible;
       const apply = (value) => {
         object.visible = value;
@@ -1346,8 +1482,12 @@ export function createSceneEditor(runtime) {
     async deleteEntity(id) {
       const object = find(id);
       if (!object || locked) return;
+      if(object.userData.studioLocked||object.userData.studioLighting?.locked||find(object.userData.studioRigId)?.userData.studioLighting?.locked)return;
       api.flushSceneEdits();
       runtime.pause();
+      if(object.userData.studioLighting)return api.removeLighting(entityId(object));
+      if(object.userData.studioLocked||find(object.userData.studioRigId)?.userData.studioLighting?.locked)return;
+      if(object.userData.studioRigId){const rigId=object.userData.studioRigId;return changeLighting(rigId,()=>{const g=find(rigId);convertLightingToCustom(g);object.removeFromParent();if(!g.children.some(l=>l.isLight)){g.removeFromParent();return;}g.userData.studioLighting=customLightingConfig(g);});}
       // Keep a local binary fragment for undo recovery after a later full save.
       const recoveryId = await runtime.cacheObject(object);
       if (deleted || !find(id)) return;
@@ -1407,6 +1547,7 @@ export function createSceneEditor(runtime) {
       const object = typeof id === "object" ? id : find(id);
       if (!object || !creation(object) || locked) return false;
       const copy = cloneEditable(object);
+      if(copy.isLight)for(const key of ['studioRigId','studioLightId','studioTarget','studioSource','studioKeyframes','studioLocked'])delete copy.userData[key];
       copy.traverse((node) => {
         node.userData.hf_id = crypto.randomUUID();
       });
@@ -1518,7 +1659,9 @@ export function createSceneEditor(runtime) {
             visible: object.visible !== false,
             transform: transformOf(object),
             color: material ? `#${material.color.getHexString()}` : null,
+            material:materialState(object.material),
             light: lightState(object),
+            lightingRig:object.userData.studioLighting?readLightingRig(object):null,
             camera: object.isPerspectiveCamera
               ? {
                   fov: object.fov,
@@ -1588,7 +1731,7 @@ export function createSceneEditor(runtime) {
           const asset = await readImportedAsset(payload.assetId);
           if (!asset) throw new Error("本地导入资产缺失，无法恢复编辑。");
           const gltf = await loader.parseAsync(asset.bytes.slice(0), "");
-          object = gltf.scene;
+          object = restoreLightingNodes(gltf.scene);
           if (object.userData.libtvFragment && object.children.length === 1)
             object = object.children[0];
           const ids = metadata?.assetNodeIds?.[id];
@@ -1630,12 +1773,7 @@ export function createSceneEditor(runtime) {
           break;
         case "light.create":
           if (!object) {
-            object =
-              payload.properties.type === "directional"
-                ? new THREE.DirectionalLight()
-                : payload.properties.type === "point"
-                  ? new THREE.PointLight()
-                  : new THREE.SpotLight();
+            object = createLight(normalizeLightProperties(payload.properties));
             object.userData.hf_id = id;
             root.add(object);
           }
@@ -1693,13 +1831,11 @@ export function createSceneEditor(runtime) {
         case "camera.active.set":
           if(object?.isCamera)object.userData.hf_active_camera=true;
           break;
+        case 'lighting.rig.set':
+          if(payload.rig)restoreLightingRig(root,lightingRigStateSchema.parse(payload.rig));else object?.removeFromParent();
+          break;
         case "light.properties.set":
-          if(object?.isLight){
-            const p=payload.properties;
-            object.color.fromArray(p.color);object.intensity=p.intensity;object.castShadow=p.castShadow;
-            if('distance' in object)object.distance=p.range||0;
-            if(object.isSpotLight){object.angle=p.outerConeAngle??object.angle;object.penumbra=p.innerConeAngle!==undefined?1-p.innerConeAngle/object.angle:object.penumbra;}
-          }
+          if(object?.isLight)setLightProperties(object,normalizeLightProperties(payload.properties));
           break;
         case "world.settings.set":
           runtime.setWorld(payload.settings);
@@ -1709,17 +1845,7 @@ export function createSceneEditor(runtime) {
         object.name = payload.name || object.name;
         applyTransform(object, payload.transform);
         object.castShadow = object.receiveShadow = true;
-        if (object.isLight) {
-          const p = payload.properties;
-          object.color.fromArray(p.color);
-          object.intensity = p.intensity;
-          object.castShadow = p.castShadow;
-          if ("distance" in object) object.distance = p.range || 0;
-          if (object.isSpotLight) {
-            object.angle = p.outerConeAngle;
-            object.penumbra = 1 - p.innerConeAngle / p.outerConeAngle;
-          }
-        }
+        if (object.isLight)setLightProperties(object,normalizeLightProperties(payload.properties));
       }
     },
     restoreSnapshot(json) {
@@ -1728,6 +1854,7 @@ export function createSceneEditor(runtime) {
           .filter((entity) => !entity.deleted)
           .map((entity) => [entity.id, entity]),
       );
+      for(const entity of entities.values())if(entity.state.lightingRig)restoreLightingRig(root,lightingRigStateSchema.parse(entity.state.lightingRig));
       const targets = new Set();
       root.traverse((object) => {
         if (object.target) targets.add(object.target);
@@ -1779,17 +1906,11 @@ export function createSceneEditor(runtime) {
         const parent = state.parentId ? find(state.parentId) : root;
         if (parent && object.parent !== parent) parent.add(object);
         const material = editableMaterial(object);
-        if (material && state.color) material.color.set(state.color);
+        if(object.isMesh&&state.material)restoreMaterialState(object,state.material);
+        else if (material && state.color) material.color.set(state.color);
         if (object.isLight && state.light) {
-          const p = state.light;
-          object.color.set(p.color);
-          object.intensity = p.intensity;
-          object.castShadow = p.castShadow;
-          object.userData.hf_cast_shadow = p.castShadow;
-          if (p.distance !== null) object.distance = p.distance;
-          if (p.angle !== null)
-            object.angle = THREE.MathUtils.degToRad(p.angle);
-          if (p.penumbra !== null) object.penumbra = p.penumbra;
+          const p=state.light;setLightProperties(object,normalizeLightProperties(p));
+          if(object.target&&p.targetLocal){object.target.position.fromArray(p.targetLocal);if(object.target.parent!==object)object.add(object.target);}
         }
         if (object.isPerspectiveCamera && state.camera) {
           const p = state.camera;
