@@ -27,3 +27,12 @@ test('public JSON uses request host while internal URLs remain unchanged',()=>{
  assert.equal(publicServiceData(data,requestBase(req)).glbUrl,'https://pavo-box.agnes-dev.com/artifacts/p/t/model.glb');
  assert.equal(data.glbUrl,BASE+'/artifacts/p/t/model.glb');
 });
+
+test('HTTPS pages upgrade managed same-host HTTP resources behind TLS proxies',()=>{
+ const base='https://pavo-box.agnes-dev.com';
+ for(const file of ['studio.glb','studio-collaboration.json']){
+  const path='/api/studio/p/snapshot/15/'+file;
+  assert.equal(resolveServiceUrl('http://pavo-box.agnes-dev.com'+path,base),base+path);
+ }
+ assert.equal(resolveServiceUrl('http://cdn.example.com/file.glb',base),'http://cdn.example.com/file.glb');
+});

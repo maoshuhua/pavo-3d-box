@@ -9,7 +9,9 @@ export function resolveServiceUrl(value, base = apiBase) {
   try {
     const url = new URL(value, base + '/');
     if (!['http:', 'https:'].includes(url.protocol)) return value;
-    if (managedPath.test(url.pathname) && (value.startsWith('/') || ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname))) {
+    const service = new URL(base);
+    const sameHost = url.host === service.host;
+    if (managedPath.test(url.pathname) && (sameHost || value.startsWith('/') || ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname))) {
       return new URL(url.pathname + url.search + url.hash, base + '/').href;
     }
   } catch {}
