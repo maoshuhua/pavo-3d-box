@@ -152,7 +152,7 @@ export function createServer({runAgent=runDeepAgent,requireConfiguration=true,da
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
  const {app,abortAll,studio,attachSocket}=createServer();
  for(const row of studio.db.prepare("SELECT * FROM runs WHERE status='running'").all()){studio.recordEvent(row.session_id,row.id,{type:'RUN_ERROR',runId:row.id,sessionId:row.session_id,message:'本地 Agent 服务已重启，任务已中断，已保留最近成功的场景结果。'});studio.db.prepare("UPDATE runs SET status='interrupted' WHERE id=?").run(row.id);}
- const server=app.listen(PORT,'127.0.0.1',()=>console.log(`3D-BOX Deep Agents: ${BASE} (${configured()?'configured':'configure .env to enable model calls'})`));
+ const server=app.listen(PORT,'0.0.0.0',()=>console.log(`3D-BOX Deep Agents: ${BASE} (${configured()?'configured':'configure .env to enable model calls'})`));
  attachSocket(server);
  const stop=async()=>{await abortAll();server.close();await closeRenderer();process.exit(0);};process.on('SIGINT',stop);process.on('SIGTERM',stop);
 }

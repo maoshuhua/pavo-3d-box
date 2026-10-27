@@ -36,3 +36,10 @@ test('HTTPS pages upgrade managed same-host HTTP resources behind TLS proxies',(
  }
  assert.equal(resolveServiceUrl('http://cdn.example.com/file.glb',base),'http://cdn.example.com/file.glb');
 });
+
+test('deployed frontend origin works even when proxy preserves an internal Host',()=>{
+ const req={headers:{host:'127.0.0.1:8788'},protocol:'http'};
+ assert.equal(allowedOrigin('https://pavo-box.agnes-dev.com',req),true);
+ assert.equal(allowedOrigin('https://unrelated.example.com',req),false);
+ assert.equal(allowedOrigin('https://pavo-box.agnes-dev.com.evil.example',req),false);
+});

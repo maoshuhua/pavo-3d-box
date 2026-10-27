@@ -8,6 +8,7 @@ export function requestBase(req) {
   return url.origin;
 }
 export function allowedOrigin(origin, req) {
+  if (origin === 'https://pavo-box.agnes-dev.com') return true;
   if (!origin) return true;
   try {
     const url = new URL(origin);
