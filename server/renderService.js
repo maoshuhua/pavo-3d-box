@@ -89,7 +89,7 @@ export async function renderInContext(context,method,args,signal,{timeoutMs=9000
  try {
   signal?.throwIfAborted();
   // Only the local scene runtime and uploaded assets can be loaded by this renderer.
-  await context.route('**/*',route=>{const url=route.request().url();return url.startsWith(BASE+'/')||url.startsWith('data:')||url.startsWith('blob:')?route.continue():route.abort();});
+  await context.route('**/*',route=>{const url=route.request().url();const parsed=new URL(url);const localArtifact=['127.0.0.1','localhost','[::1]'].includes(parsed.hostname)&&parsed.protocol==='http:'&&/^\/artifacts\/[\w-]+\/[\w-]+\/(model|input)\.glb$/.test(parsed.pathname);return localArtifact||url.startsWith(BASE+'/')||url.startsWith('data:')||url.startsWith('blob:')?route.continue():route.abort();});
   const page=await context.newPage();
   if(onFrame&&method==='previewBatch')await page.exposeFunction('__reportPreviewFrame',async frame=>{signal?.throwIfAborted();await onFrame(frame);});
   page.on('pageerror',error=>record('script',error.message));

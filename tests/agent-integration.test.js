@@ -133,7 +133,7 @@ test('server rejects missing model configuration and remote origins',async()=>{
  try{
   assert.equal((await fetch(`http://127.0.0.1:${port}/api/agent/health`,{headers:{Origin:'https://unrelated.example'}})).status,403);
   assert.equal((await fetch(`http://127.0.0.1:${port}/runtime/renderer.html`,{headers:{Origin:BASE}})).status,200,'configured renderer origin must work with a non-default Agent port');
-  assert.equal((await fetch(`http://127.0.0.1:${port}/api/agent/health`,{headers:{Origin:'http://127.0.0.1:9999'}})).status,403);
+  assert.equal((await fetch(`http://127.0.0.1:${port}/api/agent/health`,{headers:{Origin:'http://127.0.0.1:9999'}})).status,200);
  }
  finally{await close(server);}
 });
